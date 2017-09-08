@@ -9,9 +9,9 @@
 #include <errno.h>
 
 //Preprocessor constants
-#define PORT 9735
+#define PORT 4070
 #define MAX_LENGTH 4096
-#define SECRET "password\n"
+#define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 #define ERROR "<error>\n"
