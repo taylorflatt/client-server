@@ -147,7 +147,7 @@ int main(int argc, char *argv[]){
 // Closes the socket and stops the client with the appropriate exit status..
 void stop(int socket, int exit_status) {
 
-    close_socket(sock_fd);
+    close_socket(socket);
     exit(exit_status);
 }
 
