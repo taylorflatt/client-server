@@ -7,6 +7,7 @@
 #include <pwd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 //Preprocessor constants
 #define PORT 4070
@@ -18,6 +19,7 @@
 
 //Prototypes
 void handle_client(int connect_fd);
+char *read_client_message(int client_fd);
 
 int main(int argc, char *argv[]) {
     int connect_fd, server_sockfd;
@@ -46,34 +48,35 @@ int main(int argc, char *argv[]) {
     int i=1;
     setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
 
-  //Main server loop:
-    while(1){
-        //Accept a new connection and get socket to use for client:
+  // Main server loop
+    while(1) {
+        // Collect any terminated children before attempting to accept a new connection.
+        while (waitpid(-1,NULL,WNOHANG) > 0);
+        
+        // Accept a new connection and get socket to use for client:
         client_len = sizeof(client_address);
         if((connect_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
         }
 
         handle_client(connect_fd);
-
-        //if((close(connect_fd)) == -1){
-        //    fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
-        //}
     }
 
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 void handle_client(int connect_fd) {
 
-    char pass[MAX_LENGTH];
+    char *pass;
 
     // Send challenge to client.
     printf("Sending challenge to client.");
+
     write(connect_fd, CHALLENGE, strlen(CHALLENGE));
 
     // Read password from client.
-    read(connect_fd, &pass, sizeof(pass));
+    if((pass = read_client_message(connect_fd)) == NULL)
+        return;
 
     // Make sure the password is good.
     if(strcmp(pass, SECRET) == 0) {
@@ -83,33 +86,33 @@ void handle_client(int connect_fd) {
 
         if(fork() == 0) {
 
-        // (Required) Handle multiple clients.
-        if(setsid() < 0) {
-            fprintf(stderr, "Redirection error.\n");
-            exit(EXIT_FAILURE);
-        }
+            // (Required) Handle multiple clients.
+            if(setsid() < 0) {
+                fprintf(stderr, "Redirection error.\n");
+                exit(EXIT_FAILURE);
+            }
 
-        // Redirect stdin/stdout/stderr in this process to the client socket.
-        if(dup2(connect_fd, 0) < 0) {
-            fprintf(stderr, "Redirection error.\n");
-            exit(EXIT_FAILURE);
-        }
-        if(dup2(connect_fd, 1) < 0) {
-            fprintf(stderr, "Redirection error.\n");
-            exit(EXIT_FAILURE);
-        }
-        if(dup2(connect_fd, 2) < 0) {
-            fprintf(stderr, "Redirection error.\n");
-            exit(EXIT_FAILURE);
-        }
+            // Redirect stdin/stdout/stderr in this process to the client socket.
+            if(dup2(connect_fd, 0) < 0) {
+                fprintf(stderr, "Redirection error.\n");
+                exit(EXIT_FAILURE);
+            }
+            if(dup2(connect_fd, 1) < 0) {
+                fprintf(stderr, "Redirection error.\n");
+                exit(EXIT_FAILURE);
+            }
+            if(dup2(connect_fd, 2) < 0) {
+                fprintf(stderr, "Redirection error.\n");
+                exit(EXIT_FAILURE);
+            }
 
-        // Exec /bin/bash (redirections remain in effect)
-        execlp("bash", "bash", "--noediting", "-i", NULL);
+            // Exec /bin/bash (redirections remain in effect)
+            execlp("bash", "bash", "--noediting", "-i", NULL);
 
-        // When bash subprocess eventually terminates, the client socket is to be closed.
-        if((close(connect_fd)) == -1) {
-            fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
-        }
+            // When bash subprocess eventually terminates, the client socket is to be closed.
+            if((close(connect_fd)) == -1) {
+                fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
+            }
 
         } else {
             close(connect_fd);
@@ -120,4 +123,25 @@ void handle_client(int connect_fd) {
         write(connect_fd, ERROR, strlen(ERROR));
         fprintf(stderr, "Aborting connection. Invalid secret: %s", pass);
     }
+}
+
+// Reads a messagr from a server and returns it as a string (null terminated).
+// Also handles read errors internally returning NULL if an error is encountered.
+char *read_client_message(int client_fd)
+{
+  static char msg[MAX_LENGTH];
+  int nread;
+  
+    if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
+        if (errno)
+            perror("Error reading from the client socket");
+        else
+            fprintf(stderr, "Client closed connection unexpectedly\n");
+            
+        return NULL; 
+    }
+
+  msg[nread] = '\0';
+
+  return msg;
 }
