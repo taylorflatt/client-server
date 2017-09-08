@@ -20,18 +20,21 @@
 
 //Prototypes
 void close_socket(int connect_fd);
+char *read_server_message(int server_fd);
+void stop(int socket, int exit_status);
 
 int main(int argc, char *argv[]){
     int sock_fd, numBytesRead, status;
     struct sockaddr_in serv_address;
-    char ip[MAX_LENGTH], handshake[MAX_LENGTH], buf[MAX_LENGTH];
+    char ip[MAX_LENGTH], buf[MAX_LENGTH];
+    char *handshake;
     pid_t cpid, pid;
 
     // Check command-line arguments and store ip.
     if(argc != 2) {
         fprintf(stderr, "\nIncorrect number of command line arguments!\n\n");
         printf("    Usage: %s SERVER_IP\n\n", argv[0]);
-        exit(1);
+        exit(EXIT_FAILURE);
     } else {
         strcpy(ip, argv[1]);
     }
@@ -39,43 +42,46 @@ int main(int argc, char *argv[]){
     // Create client socket.
     if((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Name the socket, as agreed with the server.
     serv_address.sin_family = AF_INET;
-    serv_address.sin_addr.s_addr = inet_addr(ip);
     serv_address.sin_port = htons(PORT);
+    inet_aton(ip, &serv_address.sin_addr);
 
     // Connect the client and server sockets.
     if((connect(sock_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
         fprintf(stderr, "Error connecting to server, error: %s\n", strerror(errno));
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     
     // Receive the challenge.
-    read(sock_fd, &handshake, strlen(CHALLENGE));
+    if((handshake = read_server_message(sock_fd)) == NULL) {
+        exit(EXIT_FAILURE);
+    }
 
     //  Verify the challenge against known result.
     if(strcmp(handshake, CHALLENGE) != 0) {
         fprintf(stderr, "Error receving challenge from server, error: %s\n", strerror(errno));
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Send secret to the server for verification.
     if((write(sock_fd, SECRET, strlen(SECRET))) == -1) {
         fprintf(stderr, "Error sending secret to server, error: %s\n", strerror(errno));
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     // Receive server verification.
-    memset(handshake, 0, sizeof(handshake));
-    read(sock_fd, &handshake, sizeof(handshake));
+    if((handshake = read_server_message(sock_fd)) == NULL) {
+        exit(EXIT_FAILURE);
+    }
 
     // Receive the final verification from the server to proceed.
-    if(strncmp(handshake, PROCEED, strlen(PROCEED)) != 0) {
+    if(strcmp(handshake, PROCEED) != 0) {
         printf("%s", handshake);
-        exit(1);    
+        exit(EXIT_FAILURE);    
     }
 
     // Create a child process.
@@ -84,22 +90,19 @@ int main(int argc, char *argv[]){
 
             // Read from client's stdin.
             if((numBytesRead = read(STDIN_FILENO, &buf, sizeof(buf))) < 0) {
-                perror("Failed read from the server CHILD!");
-                close_socket(sock_fd);
-                exit(1);
+                if(errno == -1)
+                    perror("Child: Failed read from the server!");
+                stop(sock_fd, EXIT_FAILURE);
             }
 
             // The reader exited normally.
-            if(numBytesRead == 0) {
-                close_socket(sock_fd);
-                exit(1);
-            }
+            if(numBytesRead == 0)
+                stop(sock_fd, EXIT_FAILURE);
 
             // Write to server's socket.
             if(write(sock_fd, buf, strlen(buf) + 1) < 0) {
-                perror("Failed to write to server.");
-                close_socket(sock_fd);
-                exit(1);
+                perror("Child: Failed to write to server.");
+                stop(sock_fd, EXIT_FAILURE);
             }
             
             // Reset the data so no old data is floating around.
@@ -112,22 +115,18 @@ int main(int argc, char *argv[]){
 
         // Read from the server socket.
         if((numBytesRead = read(sock_fd, &buf, sizeof(buf))) < 0) {
-            perror("Failed to read from the server.");
-            close_socket(sock_fd);
-            exit(1);
+            perror("Parent: Failed to read from the server.");
+            stop(sock_fd, EXIT_FAILURE);
         }
 
         // The reader exited normally.
-        if(numBytesRead == 0) {
-            close_socket(sock_fd);
-            exit(1);
-        }
+        if(numBytesRead == 0)
+            stop(sock_fd, EXIT_FAILURE);
 
         // Write to stdout from the server.
         if(write(STDOUT_FILENO, buf, strlen(buf) + 1) < 0) {
-            perror("Failed to write to server.");
-            close_socket(sock_fd);
-            exit(1);
+            perror("Parent: Failed to write to server.");
+            stop(sock_fd, EXIT_FAILURE);
         }
 
         // Reset the data so no old data is floating around.
@@ -140,9 +139,18 @@ int main(int argc, char *argv[]){
         }
     }
 
+    // Make sure to close the connection upon exiting.
+    stop(sock_fd, EXIT_SUCCESS);
     close_socket(sock_fd);
 
-    exit(0);
+    exit(EXIT_SUCCESS);
+}
+
+// Closes the socket and stops the client.
+void stop(int socket, int exit_status) {
+
+    close_socket(sock_fd);
+    exit(cpid);
 }
 
 void close_socket(int socket) {
@@ -151,5 +159,24 @@ void close_socket(int socket) {
     if((close(socket)) == -1){
         fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
     }
+}
+
+char *read_server_message(int server_fd)
+{
+  static char msg[MAX_LENGTH];
+  int nread;
+  
+    if ((nread = read(server_fd, msg, MAX_LENGTH - 1)) <= 0) {
+        if (errno)
+            perror("Error reading from the server socket");
+        else
+            fprintf(stderr,"Server closed connection unexpectedly\n");
+            
+        return NULL; 
+    }
+
+  msg[nread] = '\0';
+
+  return msg;
 }
   
