@@ -13,8 +13,8 @@
 
 // Preprocessor Constants
 #define MAX_LENGTH 4096
-#define PORT 9735
-#define SECRET "password\n"
+#define PORT 4070
+#define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 
