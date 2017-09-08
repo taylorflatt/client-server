@@ -1,4 +1,3 @@
-//Includes
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
@@ -11,24 +10,24 @@
 
 //Preprocessor constants
 #define PORT 9735
-const char * const CHALLENGE = "<rembash>\n";
-const char * const SECRET = "password";
-const char * const PROCEED = "<ok>\n";
+#define MAX_LENGTH 4096
+#define SECRET "password\n"
+#define CHALLENGE "<rembash>\n"
+#define PROCEED "<ok>\n"
+#define ERROR "<error>\n"
 
 //Prototypes
-void handle_client(int connect_fd, int flag);
+void handle_client(int connect_fd);
 
-int main(int argc, char *argv[]){
-    int listen_fd, connect_fd, flag = 0;
-    int server_sockfd, client_sockfd;
-    int client_len;
+int main(int argc, char *argv[]) {
+    int connect_fd, server_sockfd;
+    socklen_t client_len;
     
     struct sockaddr_in server_address;
     struct sockaddr_in client_address;
 
     if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
         fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
-        flag = 1;
     }
 
     server_address.sin_family = AF_INET;
@@ -37,13 +36,11 @@ int main(int argc, char *argv[]){
 
     if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
         fprintf(stderr, "Error assigning address to socket, error: %s\n", strerror(errno));
-        flag = 1;
     }
 
     // Start listening to server socket.
     if((listen(server_sockfd, 10)) == -1){
         fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
-        flag = 1;
     }
 
     int i=1;
@@ -53,71 +50,74 @@ int main(int argc, char *argv[]){
     while(1){
         //Accept a new connection and get socket to use for client:
         client_len = sizeof(client_address);
-        if((connect_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1){
+        if((connect_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
-            flag = 1;
         }
-        //Read client messages.
-        handle_client(connect_fd, flag);
+
+        handle_client(connect_fd);
 
         //if((close(connect_fd)) == -1){
         //    fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
-        //    flag = 1;
         //}
     }
-    if(flag == 1)
-        return EXIT_FAILURE;
-    else
-        return EXIT_SUCCESS;
+
+    exit(0);
 }
 
-void handle_client(int connect_fd, int flag){
-    char msg[201], msgfix[195];
-    int nread;
+void handle_client(int connect_fd) {
+
+    char pass[MAX_LENGTH];
 
     // Send challenge to client.
     printf("Sending challenge to client.");
     write(connect_fd, CHALLENGE, strlen(CHALLENGE));
-    
-    //nread = read(connect_fd, msg, 200);
-    //msg[nread] = '\0';
-    nread = read(connect_fd, &msg, 8);
 
-    if(strcmp(msg, SECRET) == 0) {
+    // Read password from client.
+    read(connect_fd, &pass, sizeof(pass));
+
+    // Make sure the password is good.
+    if(strcmp(pass, SECRET) == 0) {
+
+        // let client know shell is ready by sending <ok>\n
+        write(connect_fd, PROCEED, strlen(PROCEED));
+
         if(fork() == 0) {
 
-            // Redirect stdin/stdout/stderr in this process to the client socket.
-            if(dup2(connect_fd, 0) < 0){
-                fprintf(stderr, "Redirection error.\n");
-                exit(EXIT_FAILURE);
-            }
-            if(dup2(connect_fd, 1) < 0){
-                fprintf(stderr, "Redirection error.\n");
-                exit(EXIT_FAILURE);
-            }
-            if(dup2(connect_fd, 2) < 0){
-                fprintf(stderr, "Redirection error.\n");
-                exit(EXIT_FAILURE);
-            }
+        // (Required) Handle multiple clients.
+        if(setsid() < 0) {
+            fprintf(stderr, "Redirection error.\n");
+            exit(EXIT_FAILURE);
+        }
 
-            write(connect_fd, PROCEED, strlen(PROCEED));
+        // Redirect stdin/stdout/stderr in this process to the client socket.
+        if(dup2(connect_fd, 0) < 0) {
+            fprintf(stderr, "Redirection error.\n");
+            exit(EXIT_FAILURE);
+        }
+        if(dup2(connect_fd, 1) < 0) {
+            fprintf(stderr, "Redirection error.\n");
+            exit(EXIT_FAILURE);
+        }
+        if(dup2(connect_fd, 2) < 0) {
+            fprintf(stderr, "Redirection error.\n");
+            exit(EXIT_FAILURE);
+        }
 
-            // exec /bin/bash (redirections remain in effect)
-            execlp("bash","bash","--noediting","-i",NULL);
+        // Exec /bin/bash (redirections remain in effect)
+        execlp("bash", "bash", "--noediting", "-i", NULL);
 
-            // let client know shell is ready by sending <ok>\n
-            
+        // When bash subprocess eventually terminates, the client socket is to be closed.
+        if((close(connect_fd)) == -1) {
+            fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
+        }
 
-            // when bash subprocess eventually terminates, the client socket is to be closed.
-            if((close(connect_fd)) == -1){
-                fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
-            }
         } else {
             close(connect_fd);
         }
-    } else {
-        printf("Aborting connection. Invalid secret: %s", msg);
+        
+    }  else {
+        // Invalid secret, tell the client.
+        write(connect_fd, ERROR, strlen(ERROR));
+        fprintf(stderr, "Aborting connection. Invalid secret: %s", pass);
     }
-
-//    exit(0);
 }
