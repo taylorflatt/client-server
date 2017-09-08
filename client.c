@@ -132,11 +132,9 @@ int main(int argc, char *argv[]){
         // Reset the data so no old data is floating around.
         memset(buf, 0, sizeof(buf));
 
-        // Check if the child is still running. If not, clean it up.
-        if((pid = waitpid(cpid, &status, WNOHANG) != 0)) {
-            close_socket(sock_fd);
-            exit(cpid);
-        }
+        // Check if the child is still running. If not, clean it up. (WNOHANG = nonblocking)
+        if((pid = waitpid(cpid, &status, WNOHANG) != 0))
+            stop(sock_fd, cpid);
     }
 
     // Make sure to close the connection upon exiting.
@@ -146,13 +144,14 @@ int main(int argc, char *argv[]){
     exit(EXIT_SUCCESS);
 }
 
-// Closes the socket and stops the client.
+// Closes the socket and stops the client with the appropriate exit status..
 void stop(int socket, int exit_status) {
 
     close_socket(sock_fd);
-    exit(cpid);
+    exit(exit_status);
 }
 
+// Closes the socket and checks for an error.
 void close_socket(int socket) {
 
     // Close the connection.
@@ -161,6 +160,8 @@ void close_socket(int socket) {
     }
 }
 
+// Reads a messagr from a server and returns it as a string (null terminated).
+// Also handles read errors internally returning NULL if an error is encountered.
 char *read_server_message(int server_fd)
 {
   static char msg[MAX_LENGTH];
