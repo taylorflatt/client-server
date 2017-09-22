@@ -1,1 +1,1 @@
-# simple-client-server
+# Iterations on a client server in C.
