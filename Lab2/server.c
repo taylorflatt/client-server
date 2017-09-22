@@ -284,6 +284,44 @@ pid_t ptyOpen(int *master_fd, const struct termios *tty ,const struct winsize *s
 void sigchld_handler(int signal) {
     wait(NULL);
 
+    char read_string[MAX_LENGTH];
+
+    char *filename = "trump.txt";
+    FILE *fptr = NULL;
+ 
+    if((fptr = fopen(filename,"r")) == NULL)
+    {
+        fprintf(stderr,"error opening %s\n",filename);
+    }
+ 
+    while(fgets(read_string,sizeof(read_string),fptr) != NULL) {
+        printf("%s",read_string);
+    }
+
+    int r;
+    switch(r = rand() % 6 + 1) {
+        case 1:
+            printf("In the old days, children like these would be carried out on stretchers. Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);
+            break;
+        case 2:
+            printf("I'd like to punch him in the face! Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);
+            break;
+        case 3:
+            printf("The concept of Zombies was created by and for the Chinese in order to make U.S. manufacturing non-competitive. Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);
+            break;
+        case 4:
+            printf("Do you think hands like these would forget to reap these children? Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);    
+            break;
+        case 5:
+            printf("My ability to handle children and signals is the best. The greatest. Wonderful. No one questions it. Look at me. Everyone knows I know what I'm doing. Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);
+            break;
+        case 6:
+            printf("Why can't we use nuclear weapons? Processes must be destroyed when no longer wanted! Processes %d and %d have been cleaned up!\n", c_pid[0], c_pid[1]);
+            break;
+    }
+
+    fclose(fptr);
+
     kill(c_pid[0], signal);
     kill(c_pid[1], signal);
     exit(0);
