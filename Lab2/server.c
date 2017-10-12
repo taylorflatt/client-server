@@ -19,31 +19,40 @@
 //Preprocessor constants
 #define PORT 4070
 #define MAX_LENGTH 4096
+#define MAX_NUM_CLIENTS 64000
 #define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 #define ERROR "<error>\n"
 
-// Keep track of PIDs so we know what to kill.
+int epoll_fd;
+
 int c_pid[5];
+
+int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
+pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 
 //Prototypes
 struct termios tty;
 void handle_client(int connect_fd);
-void accept_client(int connect_fd);
-pid_t ptyOpen(int *master_fd, const struct termios *tty , const struct winsize *slaveWS);
+void create_processes(int connect_fd);
+pid_t pty_open(int *master_fd, int connect_fd, const struct termios *tty);
 void sigchld_handler(int signal);
 char *read_client_message(int client_fd);
+int create_server();
 
-int main(int argc, char *argv[]) {
-    int connect_fd, server_sockfd;
-    socklen_t client_len;
-    
+int create_server() {
+    int server_sockfd;
     struct sockaddr_in server_address;
-    struct sockaddr_in client_address;
 
-    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
+    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
+    }
+
+    int i=1;
+    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
+        fprintf(stderr, "Error setting sockopt.");
+        return -1;
     }
 
     server_address.sin_family = AF_INET;
@@ -59,10 +68,23 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
     }
 
-    int i=1;
-    setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
+    return server_sockfd;
+}
 
-    signal(SIGCHLD, SIG_IGN);
+int main(int argc, char *argv[]) {
+    int connect_fd, server_sockfd;
+    socklen_t client_len;
+    
+    struct sockaddr_in client_address;
+
+    if((server_sockfd = create_server()) == -1) {
+        exit(EXIT_FAILURE);
+    }
+
+    if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
+        fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.");
+        exit(EXIT_FAILURE);
+    }
 
     // Main server loop
     while(1) {
@@ -78,6 +100,7 @@ int main(int argc, char *argv[]) {
         // Fork immediately.
         if(connect_fd != -1) {
             if(fork() == 0) {
+                close(server_sockfd);
                 handle_client(connect_fd);
             }
             close(connect_fd);
@@ -87,7 +110,7 @@ int main(int argc, char *argv[]) {
     exit(EXIT_SUCCESS);
 }
 
-// Handles the three-way handshake and starts up the accept_client method.
+// Handles the three-way handshake and starts up the create_processes method.
 void handle_client(int connect_fd) {
     
     char *pass;
@@ -97,17 +120,19 @@ void handle_client(int connect_fd) {
 
     write(connect_fd, CHALLENGE, strlen(CHALLENGE));
 
+    // TIMER FOR SIGNAL HANDLER
     // Read password from client.
     if((pass = read_client_message(connect_fd)) == NULL)
         return;
-
+    // STOP TIMER.
+    
     // Make sure the password is good.
     if(strcmp(pass, SECRET) == 0) {
         printf("Challenge passed. Moving into accept client.\n");
 
         // let client know shell is ready by sending <ok>\n
         write(connect_fd, PROCEED, strlen(PROCEED));
-        accept_client(connect_fd);
+        create_processes(connect_fd);
         
     }  else {
         // Invalid secret, tell the client.
@@ -117,12 +142,11 @@ void handle_client(int connect_fd) {
 }
 
 // Creates two processes which read and write on a socket connecting the client and server.
-void accept_client(int connect_fd) {
+void create_processes(int connect_fd) {
     
     int master_fd;
 
     struct sigaction act;
-    struct winsize ws;
     act.sa_handler = sigchld_handler;
     act.sa_flags = 0;
     sigemptyset(&act.sa_mask);
@@ -132,11 +156,10 @@ void accept_client(int connect_fd) {
         exit(1);
     }
 
-    printf("Setting c_pid[0] to ptyOpen.\n");
+    printf("Setting c_pid[0] to pty_open.\n");
 
-    if((c_pid[0] = ptyOpen(&master_fd, &tty, &ws)) == -1) 
+    if((c_pid[0] = pty_open(&master_fd, connect_fd, &tty)) == -1) 
         exit(1);
-
     
     // Reads from the client (socket) and writes to the master.
     char buf[MAX_LENGTH];
@@ -185,7 +208,7 @@ void accept_client(int connect_fd) {
 }
 
 // Creates the master and slave pty.
-pid_t ptyOpen(int *master_fd, const struct termios *tty ,const struct winsize *slaveWS) {
+pid_t pty_open(int *master_fd, int connect_fd, const struct termios *tty) {
     
     char * slavename;
     int massa, slave_fd, err;
@@ -219,6 +242,7 @@ pid_t ptyOpen(int *master_fd, const struct termios *tty ,const struct winsize *s
         
         // Massa is not needed in the child, close it.
         close(massa);
+        close(connect_fd);
 
         if(setsid() == -1) {
             printf("Could not create a new session.\n");
@@ -232,15 +256,6 @@ pid_t ptyOpen(int *master_fd, const struct termios *tty ,const struct winsize *s
         
         if(tcsetattr(slave_fd, TCSANOW, tty) == -1) {
             printf("Could not set the set the terminal parameters.\n");
-            return -1;
-        }
-
-        
-        // TODO: Figure out why this resizes so weirdly. Without it, things are fine. 
-        //       With it, things are nearly double spaced.
-        // Window resizing.
-        if(slaveWS != NULL) {
-            if(ioctl(slave_fd, TIOCSWINSZ, slaveWS) == -1)
             return -1;
         }
 
@@ -271,17 +286,10 @@ pid_t ptyOpen(int *master_fd, const struct termios *tty ,const struct winsize *s
 
     * master_fd = massa;
     return c_pid;
-    
-    // Parent
-    //if(c_pid != 0) {
-    //
-  //  } else {
-  //      return -1;
-   // }
 }
 
 // Collects processes.
-void sigchld_handler(int signal) {
+void sigchld_handler(int sig) {
     wait(NULL);
 
     char read_string[MAX_LENGTH];
@@ -290,9 +298,7 @@ void sigchld_handler(int signal) {
     FILE *fptr = NULL;
  
     if((fptr = fopen(filename,"r")) == NULL)
-    {
         fprintf(stderr,"error opening %s\n",filename);
-    }
  
     while(fgets(read_string,sizeof(read_string),fptr) != NULL) {
         printf("%s",read_string);
@@ -322,8 +328,8 @@ void sigchld_handler(int signal) {
 
     fclose(fptr);
 
-    kill(c_pid[0], signal);
-    kill(c_pid[1], signal);
+    kill(c_pid[0], sig);
+    kill(c_pid[1], sig);
     exit(0);
 }
 
