@@ -219,6 +219,8 @@ void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
 // Handles the three-way handshake and starts up the create_processes method.
 void handle_client(void *client_fd_ptr) {
 
+    int flags;
+
     // Dereference the int pointer and get rid of the memory now that we no longer need it.
     int client_fd = *(int *) client_fd_ptr;
     free(client_fd_ptr);
@@ -230,6 +232,23 @@ void handle_client(void *client_fd_ptr) {
         return NULL;
     }
 
+    /// Need to get the current fd's flags and then add non-blocking and set them.
+    if((flags = fcntl(client_fd, F_GETFL, 0)) == -1) {
+        fprintf(stderr, "Failed to get flags.");
+    }
+
+    flags |= O_NONBLOCK;
+
+    if(fcntl(client_fd, F_SETFL, flags) == -1) {
+        fprintf(stderr, "Failed to set non-blocking flags.");
+    }
+
+    if(pty_open(&master_fd, client_fd, &tty)) == -1) {
+        fprintf(stderr, "Failed to open pty and start bash.");
+        close(master_fd);
+    }
+
+    
 }
 
 // Creates two processes which read and write on a socket connecting the client and server.
@@ -299,40 +318,59 @@ void create_processes(int client_fd) {
 }
 
 // Creates the master and slave pty.
-pid_t pty_open(int *master_fd, int client_fd, const struct termios *tty) {
+int pty_open(int *master_fd, int client_fd, const struct termios *tty) {
     
-    char * slavename;
-    int massa, slave_fd, err;
+    char * pty_slave;
+    int pty_master, slave_fd, err;
+    struct epoll_event ep_ev[2];
+    pid_t b_pid;
 
     /* Open an unused pty dev and store the fd for later reference.
         O_RDWR := Open pty for reading + writing. 
         O_NOCTTY := Don't make it a controlling terminal for the process. 
     */
-    if((massa = posix_openpt(O_RDWR|O_NOCTTY)) == -1)
-        return -1;
+    if((pty_master = posix_openpt(O_RDWR|O_NOCTTY|O_CLOEXEC)) == -1) {
+        fprintf(stderr, "Failed openpt.");
+        return -1;        
+    }
+
+    /// Need to get the pty_master fd's flags and then add non-blocking and set them.
+    if((flags = fcntl(pty_master, F_GETFL, 0)) == -1) {
+        fprintf(stderr, "Failed to get flags.");
+    }
+
+    flags |= O_NONBLOCK;
+
+    if(fcntl(pty_master, F_SETFL, flags) == -1) {
+        fprintf(stderr, "Failed to set non-blocking flags.");
+    }
     
     /* Attempt to kickstart the master.
         Grantpt := Creates a child process that executes a set-user-ID-root program changing ownership of the slave 
             to be the same as the effective user ID of the calling process and changes permissions so the owner 
             has R/W permissions.
         Unlockpt := Removes the internal lock placed on the slave corresponding to the pty. (This must be after grantpt).
-        ptsname := Returns the name of the pty slave corresponding to the pty master referred to by massa. (/dev/pts/nn).
+        ptsname := Returns the name of the pty slave corresponding to the pty master referred to by pty_master. (/dev/pts/nn).
     */
     printf("Before granting pt\n");
-    if(grantpt(massa) == -1 || unlockpt(massa) == -1 || (slavename = ptsname(massa)) == NULL) {
+    if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (pty_slave = ptsname(pty_master)) == NULL) {
         err = errno;
-        close(massa);
+        close(pty_master);
         errno = err;
         return -1;
     }
-    
-    // Child
-    pid_t c_pid;
-    if((c_pid = fork()) == 0) {
-        printf("slavename = %s\n", slavename);
+
+    pty_slave = (char *) malloc(1024);
+    strcpy(pty_slave, ptsname(pty_master));
+
+    /// Create the bash process.
+    ///
+    /// Fork off a new bash process and redirect stdin/stdout/stderr appropriately.
+    if((b_pid = fork()) == 0) {
+        printf("pty_slave = %s\n", pty_slave);
         
-        // Massa is not needed in the child, close it.
-        close(massa);
+        // pty_master is not needed in the child, close it.
+        close(pty_master);
         close(client_fd);
 
         if(setsid() == -1) {
@@ -340,8 +378,8 @@ pid_t pty_open(int *master_fd, int client_fd, const struct termios *tty) {
             return -1;            
         }
 
-        if((slave_fd = open(slavename, O_RDWR)) == -1) {
-            printf("Could not open %s\n", slavename);
+        if((slave_fd = open(pty_slave, O_RDWR)) == -1) {
+            printf("Could not open %s\n", pty_slave);
             return -1;
         }
         
@@ -369,14 +407,25 @@ pid_t pty_open(int *master_fd, int client_fd, const struct termios *tty) {
         if(slave_fd > STDERR_FILENO)
             close(slave_fd);
 
-        // Shouldn't ever go this far.
-        //return -1;
     }
 
-    printf("slave pid = %d\n", (int)c_pid);
+    printf("slave pid = %d\n", (int)b_pid);
 
-    * master_fd = massa;
-    return c_pid;
+    * master_fd = pty_master;
+    free(pty_slave);
+
+    client_fd_tuples[client_fd] = pty_master;
+
+    // Setup the epoll event handling (R/W).
+    ep_ev[0].data.fd = client_fd;
+    ep_ev[0].events = EPOLLIN | EPOLLET;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev);
+
+    ep_ev[1].data.fd = pty_master;
+    ep_ev[1].events = EPOLLIN | EPOLLET;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1);
+    
+    return 0;
 }
 
 // Collects processes.
