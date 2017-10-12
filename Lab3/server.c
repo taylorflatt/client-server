@@ -27,19 +27,19 @@
 
 int epoll_fd;
 
-int c_pid[5];
-
 int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 
 //Prototypes
 struct termios tty;
-void handle_client(int connect_fd);
-void create_processes(int connect_fd);
-pid_t pty_open(int *master_fd, int connect_fd, const struct termios *tty);
+void handle_client(int client_fd);
+void create_processes(int client_fd);
+pid_t pty_open(int *master_fd, int client_fd, const struct termios *tty);
 void sigchld_handler(int signal);
 char *read_client_message(int client_fd);
+
 int create_server();
+void *epoll_listener(void * NULL);
 
 int create_server() {
     int server_sockfd;
@@ -71,9 +71,14 @@ int create_server() {
     return server_sockfd;
 }
 
+void *epoll_listener(void * NULL)
+{
+    
+}
+
 int main(int argc, char *argv[]) {
-    int connect_fd, server_sockfd;
-    socklen_t client_len;
+    int client_fd, server_sockfd;
+    pthread_t thread_id;
     
     struct sockaddr_in client_address;
 
@@ -86,24 +91,34 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Main server loop
+    if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
+        fprintf(stderr, "Error creating EPOLL.");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_create(&thread_id, NULL, &epoll_listener, NULL);
+
+    /// Client accept loop.
+    ///
+    /// Server will create a pthread which sits and listens for new clients and then
+    /// runs the initial handshake between client/server.
     while(1) {
         // Collect any terminated children before attempting to accept a new connection.
         while (waitpid(-1,NULL,WNOHANG) > 0);
         
         // Accept a new connection and get socket to use for client:
         client_len = sizeof(client_address);
-        if((connect_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
+        if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
         }
         
         // Fork immediately.
-        if(connect_fd != -1) {
+        if(client_fd != -1) {
             if(fork() == 0) {
                 close(server_sockfd);
-                handle_client(connect_fd);
+                handle_client(client_fd);
             }
-            close(connect_fd);
+            close(client_fd);
         }
     }
 
@@ -111,18 +126,18 @@ int main(int argc, char *argv[]) {
 }
 
 // Handles the three-way handshake and starts up the create_processes method.
-void handle_client(int connect_fd) {
+void handle_client(int client_fd) {
     
     char *pass;
 
     // Send challenge to client.
     printf("Sending challenge to client.\n");
 
-    write(connect_fd, CHALLENGE, strlen(CHALLENGE));
+    write(client_fd, CHALLENGE, strlen(CHALLENGE));
 
     // TIMER FOR SIGNAL HANDLER
     // Read password from client.
-    if((pass = read_client_message(connect_fd)) == NULL)
+    if((pass = read_client_message(client_fd)) == NULL)
         return;
     // STOP TIMER.
     
@@ -131,18 +146,18 @@ void handle_client(int connect_fd) {
         printf("Challenge passed. Moving into accept client.\n");
 
         // let client know shell is ready by sending <ok>\n
-        write(connect_fd, PROCEED, strlen(PROCEED));
-        create_processes(connect_fd);
+        write(client_fd, PROCEED, strlen(PROCEED));
+        create_processes(client_fd);
         
     }  else {
         // Invalid secret, tell the client.
-        write(connect_fd, ERROR, strlen(ERROR));
+        write(client_fd, ERROR, strlen(ERROR));
         fprintf(stderr, "Aborting connection. Invalid secret: %s", pass);
     }
 }
 
 // Creates two processes which read and write on a socket connecting the client and server.
-void create_processes(int connect_fd) {
+void create_processes(int client_fd) {
     
     int master_fd;
 
@@ -158,7 +173,7 @@ void create_processes(int connect_fd) {
 
     printf("Setting c_pid[0] to pty_open.\n");
 
-    if((c_pid[0] = pty_open(&master_fd, connect_fd, &tty)) == -1) 
+    if((c_pid[0] = pty_open(&master_fd, client_fd, &tty)) == -1) 
         exit(1);
     
     // Reads from the client (socket) and writes to the master.
@@ -166,7 +181,7 @@ void create_processes(int connect_fd) {
     pid_t pid;
     if((pid = fork()) == 0) {
         while(1) {
-            if(read(connect_fd, &buf, 1) != 1)
+            if(read(client_fd, &buf, 1) != 1)
                 break;
             if(write(master_fd, &buf, 1) != 1)
                 break;
@@ -191,13 +206,13 @@ void create_processes(int connect_fd) {
 
             // Be careful that the appropriate writes are sent. Buf is not wiped.
             do {
-                if((nwrite = write(connect_fd, total + buf, read_len - total)) == -1)
+                if((nwrite = write(client_fd, total + buf, read_len - total)) == -1)
                     break;
             } while((total += nwrite) < read_len);
         }
     }
 
-    close(connect_fd);
+    close(client_fd);
     close(master_fd);
 
     act.sa_handler = SIG_IGN;
@@ -208,7 +223,7 @@ void create_processes(int connect_fd) {
 }
 
 // Creates the master and slave pty.
-pid_t pty_open(int *master_fd, int connect_fd, const struct termios *tty) {
+pid_t pty_open(int *master_fd, int client_fd, const struct termios *tty) {
     
     char * slavename;
     int massa, slave_fd, err;
@@ -242,7 +257,7 @@ pid_t pty_open(int *master_fd, int connect_fd, const struct termios *tty) {
         
         // Massa is not needed in the child, close it.
         close(massa);
-        close(connect_fd);
+        close(client_fd);
 
         if(setsid() == -1) {
             printf("Could not create a new session.\n");
