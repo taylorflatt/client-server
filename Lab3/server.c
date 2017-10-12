@@ -15,6 +15,11 @@
 #include <signal.h>
 #include <linux/tcp.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <time.h>
+#include <sys/epoll.h>
+#include <sys/syscall.h>
+#include <sys/time.h>
 
 //Preprocessor constants
 #define PORT 4070
@@ -27,6 +32,7 @@
 
 int epoll_fd;
 
+// A map to store the fd for pty/socket.
 int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 
@@ -40,6 +46,7 @@ char *read_client_message(int client_fd);
 
 int create_server();
 void *epoll_listener(void * NULL);
+void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 
 int create_server() {
     int server_sockfd;
@@ -73,11 +80,12 @@ int create_server() {
 
 void *epoll_listener(void * NULL)
 {
-    
+
 }
 
 int main(int argc, char *argv[]) {
     int client_fd, server_sockfd;
+    int *client_fd_ptr;
     pthread_t thread_id;
     
     struct sockaddr_in client_address;
@@ -111,6 +119,13 @@ int main(int argc, char *argv[]) {
         if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
         }
+
+
+        client_fd_ptr = (int *) malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
+        if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
+            fprintf(stderr, "Error creating the accept temporary pthread.");
+        }
         
         // Fork immediately.
         if(client_fd != -1) {
@@ -125,35 +140,96 @@ int main(int argc, char *argv[]) {
     exit(EXIT_SUCCESS);
 }
 
-// Handles the three-way handshake and starts up the create_processes method.
-void handle_client(int client_fd) {
-    
+int handshake(int client_fd) {
+
+    // Three second timer.
+    static struct itimerspec timer;
+    timer.it_value = { .tv_sec = 3};
+
+    // Create the signal action.
+    struct sigaction sig_act;
+    sig_act.sa_flags = SA_SIGINFO;
+    sig_act.sa_sigaction = &sighandshake_handler;
+
+    // Create a signal event tied to a specific thread.
+    struct sigevent sig_ev;
+    sig_ev.sigev_signo = SIGALRM;
+    sig_ev.sigev_notify = SIGEV_THREAD_ID;
+
+    int alarm_flag = 0;
     char *pass;
+    timer_t timer_id;
 
-    // Send challenge to client.
-    printf("Sending challenge to client.\n");
 
-    write(client_fd, CHALLENGE, strlen(CHALLENGE));
+    sigemptyset(&sig_act.sa_mask);
 
-    // TIMER FOR SIGNAL HANDLER
-    // Read password from client.
-    if((pass = read_client_message(client_fd)) == NULL)
-        return;
-    // STOP TIMER.
-    
-    // Make sure the password is good.
-    if(strcmp(pass, SECRET) == 0) {
-        printf("Challenge passed. Moving into accept client.\n");
-
-        // let client know shell is ready by sending <ok>\n
-        write(client_fd, PROCEED, strlen(PROCEED));
-        create_processes(client_fd);
-        
-    }  else {
-        // Invalid secret, tell the client.
-        write(client_fd, ERROR, strlen(ERROR));
-        fprintf(stderr, "Aborting connection. Invalid secret: %s", pass);
+    if(sigaction(SIGALRM, &sig_act, NULL) == -1) {
+        fprintf(stderr, "Error setting up sigaction.")
     }
+
+    // Setup the signal event with the appropriate flags and assign to a 
+    // specific thread.
+    sig_ev.sigev_value.sival_ptr = &alarm_flag;
+    sig_ev._sigev_un._tid = syscall(__NR_gettid);
+
+    if(timer_create(CLOCK_REALTIME, &sig_ev, &timer_id) == -1) {
+        fprintf(stderr, "Error creating handshake timer.");
+    }
+
+    if(timer_settime(timer_id, 0, &timer, NULL) == -1) {
+        fprintf(stderr, "Error setting handshake timer duration.");
+    }
+
+    // Sending the challenge to the client.
+    if(alarm_flag || write(client_fd, CHALLENGE, strlen(CHALLENGE))) {
+        fprintf(stderr, "Server took too long sending message or write failed. AlarmFlag: " + alarm_flag);
+        return -1;
+    }
+
+    if(alarm_flag || (pass = read_client_message(client_fd)) == NULL) {
+        fprintf(stderr, "Client took too long sending message or read failed. AlarmFlag: " + alarm_flag);
+        return -1;
+    }
+
+    if(alarm_flag || strcmp(pass, SECRET) != 0) {
+        fprintf(stderr, "Server took too long comparing the challenge, the compare failed, or invalid secret. AlarmFlag: " + alarm_flag);
+        write(client_fd, ERROR, strlen(ERROR));
+        return -1;
+    } else {
+        write(client_fd, PROCEED, strlen(PROCEED));
+    }
+
+    if(signal(SIGALRM, SIG_IGN) == SIG_ERR) {
+        fprintf(stderr, "Failed to ignore the handshake signal.");
+    }
+
+    if(timer_delete(timer_id) == -1) {
+        fprintf(stderr, "Failed to delete the handshake timer.");
+    }
+
+    return 0;
+}
+
+// Empty signal handler for the handshake.
+void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
+{
+    fprintf(stdout, "Alarm has a value: %d\n", *(int *) (sip->si_ptr));
+}
+
+// Handles the three-way handshake and starts up the create_processes method.
+void handle_client(void *client_fd_ptr) {
+
+    // Dereference the int pointer and get rid of the memory now that we no longer need it.
+    int client_fd = *(int *) client_fd_ptr;
+    free(client_fd_ptr);
+
+    // Conduct the three-way handshake with the client.
+    if(handshake(client_fd) == -1) {
+        fprintf(stderr, "Client failed the handshake.");
+        close(client_fd);
+        return NULL;
+    }
+
 }
 
 // Creates two processes which read and write on a socket connecting the client and server.
