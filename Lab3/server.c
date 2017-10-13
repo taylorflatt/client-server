@@ -40,26 +40,26 @@
 #define PROCEED "<ok>\n"
 #define ERROR "<error>\n"
 
+// Epoll file descriptor.
 int epoll_fd;
 
 // A map to store the fd for pty/socket.
 int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
+struct termios tty;
 
 //Prototypes
-struct termios tty;
-void *handle_client(void *client_fd_ptr);
-int pty_open(int client_fd, const struct termios *tty);
-void sigchld_handler(int signal);
-char *read_client_message(int client_fd);
-
 int create_server();
 void *epoll_listener(void * ignore);
+void *handle_client(void *client_fd_ptr);
 int handshake(int client_fd);
-void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
-int transfer_data(int from, int to);
+int pty_open(int client_fd, const struct termios *tty);
 int create_bash_process(char *pty_slave, const struct termios *tty);
 int set_nonblocking_fd(int fd);
+void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
+char *read_client_message(int client_fd);
+int transfer_data(int from, int to);
+
 
 int main(int argc, char *argv[]) {
     int client_fd, server_sockfd;
@@ -452,20 +452,20 @@ char *read_client_message(int client_fd)
 
 int transfer_data(int from, int to) {
     
-        char buf[MAX_LENGTH];
-        static ssize_t nread;
-    
-        while((nread = read(from, buf, MAX_LENGTH)) > 0) {
-            if(write(to, buf, nread) == -1) {
-                fprintf(stderr, "Failed writing data.");
-                break;
-            }
+    char buf[MAX_LENGTH];
+    static ssize_t nread;
+
+    while((nread = read(from, buf, MAX_LENGTH)) > 0) {
+        if(write(to, buf, nread) == -1) {
+            fprintf(stderr, "Failed writing data.");
+            break;
         }
-    
-        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-            fprintf(stderr, "Failed reading data.");
-            return -1;
-        }
-    
-        return 0;
+    }
+
+    if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+        fprintf(stderr, "Failed reading data.");
+        return -1;
+    }
+
+    return 0;
 }
