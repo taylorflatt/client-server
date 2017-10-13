@@ -70,6 +70,7 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_address;
 
     if((server_sockfd = create_server()) == -1) {
+        fprintf(stderr, "Error creating the server.");
         exit(EXIT_FAILURE);
     }
 
@@ -83,7 +84,9 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    pthread_create(&thread_id, NULL, &epoll_listener, NULL);
+    if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
+        fprintf(stderr, "Failed creating the pthread. Lack of resources or system limit encountered.\n");
+    }
 
     /// Client accept loop.
     ///
@@ -132,6 +135,7 @@ int create_server() {
     // Start listening to server socket.
     if((listen(server_sockfd, 10)) == -1){
         fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
+        return -1;
     }
 
     return server_sockfd;
@@ -149,7 +153,6 @@ void *epoll_listener(void * ignore) {
 
         if(events == -1) {
             if(errno == EINTR) {
-                fprintf(stderr, "I see a ^C.\n");
                 continue;
             } else {
                 fprintf(stderr, "Epoll loop error.\n");
@@ -336,11 +339,19 @@ int pty_open(int client_fd, const struct termios *tty) {
     // Setup the epoll event handling (R/W).
     ep_ev[0].data.fd = client_fd;
     ep_ev[0].events = EPOLLIN | EPOLLET;
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev);
 
     ep_ev[1].data.fd = pty_master;
     ep_ev[1].events = EPOLLIN | EPOLLET;
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1);
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev) == -1) {
+        fprintf(stderr, "Error creating epoll_ctl for the client_fd.");
+        return -1;
+    }
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1) == -1) {
+        fprintf(stderr, "Error creating epoll_ctl for the pty_master.");
+        return -1;
+    }
     
     return 0;
 }
