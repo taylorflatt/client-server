@@ -167,8 +167,8 @@ void *epoll_listener(void * ignore) {
                     kill(bash_fd[ev_list[i].data.fd], SIGTERM);
                     close(client_fd_tuples[ev_list[i].data.fd]);
                 }
-            } else if(ev_list[i].events & (EPOLLHUP | EPOLLERR)) {
-                fprintf(stderr, "Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+            } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
+                fprintf(stderr, "Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 kill(bash_fd[ev_list[i].data.fd], SIGTERM);
                 close(client_fd_tuples[ev_list[i].data.fd]);
             }
