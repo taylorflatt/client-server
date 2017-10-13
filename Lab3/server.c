@@ -55,9 +55,60 @@ char *read_client_message(int client_fd);
 
 int create_server();
 void *epoll_listener(void * ignore);
+int handshake(int client_fd);
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 int transfer_data(int from, int to);
 int create_bash_process(char *pty_slave, const struct termios *tty);
+int set_nonblocking_fd(int fd);
+
+int main(int argc, char *argv[]) {
+    int client_fd, server_sockfd;
+    int *client_fd_ptr;
+    pthread_t thread_id;
+    socklen_t client_len;
+    
+    struct sockaddr_in client_address;
+
+    if((server_sockfd = create_server()) == -1) {
+        exit(EXIT_FAILURE);
+    }
+
+    if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
+        fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
+        fprintf(stderr, "Error creating EPOLL.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_create(&thread_id, NULL, &epoll_listener, NULL);
+
+    /// Client accept loop.
+    ///
+    /// Server will create a pthread which sits and listens for new clients and then
+    /// runs the initial handshake between client/server.
+    while(1) {
+        // Collect any terminated children before attempting to accept a new connection.
+        while (waitpid(-1,NULL,WNOHANG) > 0);
+        
+        // Accept a new connection and get socket to use for client:
+        client_len = sizeof(client_address);
+        if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
+            fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
+        }
+
+
+        client_fd_ptr = (int *) malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
+        if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
+            fprintf(stderr, "Error creating the accept temporary pthread.\n");
+        }
+    }
+
+    exit(EXIT_SUCCESS);
+}
 
 int create_server() {
     int server_sockfd;
@@ -124,80 +175,39 @@ void *epoll_listener(void * ignore) {
     }
 }
 
-int transfer_data(int from, int to) {
-    
-        char buf[MAX_LENGTH];
-        static ssize_t nread;
-    
-        while((nread = read(from, buf, MAX_LENGTH)) > 0) {
-            if(write(to, buf, nread) == -1) {
-                fprintf(stderr, "Failed writing data.");
-                break;
-            }
-        }
-    
-        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-            fprintf(stderr, "Failed reading data.");
-            return -1;
-        }
-    
-        return 0;
-}
+// Handles the three-way handshake and starts up the create_processes method.
+void  *handle_client(void *client_fd_ptr) {
 
-int main(int argc, char *argv[]) {
-    int client_fd, server_sockfd;
-    int *client_fd_ptr;
-    pthread_t thread_id;
-    socklen_t client_len;
-    
-    struct sockaddr_in client_address;
+    int flags;
 
-    if((server_sockfd = create_server()) == -1) {
-        exit(EXIT_FAILURE);
+    // Dereference the int pointer and get rid of the memory now that we no longer need it.
+    int client_fd = *(int *) client_fd_ptr;
+    free(client_fd_ptr);
+    pthread_detach(pthread_self());
+
+    // Conduct the three-way handshake with the client.
+    if(handshake(client_fd) == -1) {
+        fprintf(stderr, "Client failed the handshake.\n");
+        close(client_fd);
+        return NULL;
     }
 
-    if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.\n");
-        exit(EXIT_FAILURE);
+    if(set_nonblocking_fd(client_fd) == -1) {
+        fprintf(stderr, "Error setting client to non-blocking.");
     }
 
-    if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
-        fprintf(stderr, "Error creating EPOLL.\n");
-        exit(EXIT_FAILURE);
+    if(pty_open(client_fd, &tty) == -1) {
+        fprintf(stderr, "Failed to open pty and start bash.\n");
     }
 
-    pthread_create(&thread_id, NULL, &epoll_listener, NULL);
-
-    /// Client accept loop.
-    ///
-    /// Server will create a pthread which sits and listens for new clients and then
-    /// runs the initial handshake between client/server.
-    while(1) {
-        // Collect any terminated children before attempting to accept a new connection.
-        while (waitpid(-1,NULL,WNOHANG) > 0);
-        
-        // Accept a new connection and get socket to use for client:
-        client_len = sizeof(client_address);
-        if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
-            fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
-        }
-
-
-        client_fd_ptr = (int *) malloc(sizeof(int));
-        *client_fd_ptr = client_fd;
-        if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
-            fprintf(stderr, "Error creating the accept temporary pthread.\n");
-        }
-    }
-
-    exit(EXIT_SUCCESS);
+    return NULL;
 }
 
 int handshake(int client_fd) {
-
+    
     // Three second timer.
     static struct itimerspec timer;
-    timer.it_value.tv_sec = 5;
+    timer.it_value.tv_sec = 3;
 
     // Create the signal action.
     struct sigaction sig_act;
@@ -212,7 +222,6 @@ int handshake(int client_fd) {
     int alarm_flag = 0;
     char *pass;
     timer_t timer_id;
-
 
     sigemptyset(&sig_act.sa_mask);
 
@@ -263,48 +272,6 @@ int handshake(int client_fd) {
     return 0;
 }
 
-// Empty signal handler for the handshake.
-void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
-{
-    fprintf(stdout, "Alarm has a value: %d\n", *(int *) (sip->si_ptr));
-    *(int *) sip->si_ptr = 1;
-}
-
-// Handles the three-way handshake and starts up the create_processes method.
-void  *handle_client(void *client_fd_ptr) {
-
-    int flags;
-
-    // Dereference the int pointer and get rid of the memory now that we no longer need it.
-    int client_fd = *(int *) client_fd_ptr;
-    free(client_fd_ptr);
-    pthread_detach(pthread_self());
-
-    // Conduct the three-way handshake with the client.
-    if(handshake(client_fd) == -1) {
-        fprintf(stderr, "Client failed the handshake.\n");
-        close(client_fd);
-        return NULL;
-    }
-
-    /// Need to get the current fd's flags and then add non-blocking and set them.
-    if((flags = fcntl(client_fd, F_GETFL, 0)) == -1) {
-        fprintf(stderr, "Failed to get flags.\n");
-    }
-
-    flags |= O_NONBLOCK;
-
-    if(fcntl(client_fd, F_SETFL, flags) == -1) {
-        fprintf(stderr, "Failed to set non-blocking flags.\n");
-    }
-
-    if(pty_open(client_fd, &tty) == -1) {
-        fprintf(stderr, "Failed to open pty and start bash.\n");
-    }
-
-    return NULL;
-}
-
 // Creates the master and slave pty.
 int pty_open(int client_fd, const struct termios *tty) {
     
@@ -322,15 +289,8 @@ int pty_open(int client_fd, const struct termios *tty) {
         return -1;        
     }
 
-    /// Need to get the pty_master fd's flags and then add non-blocking and set them.
-    if((flags = fcntl(pty_master, F_GETFL, 0)) == -1) {
-        fprintf(stderr, "Failed to get flags.\n");
-    }
-
-    flags |= O_NONBLOCK;
-
-    if(fcntl(pty_master, F_SETFL, flags) == -1) {
-        fprintf(stderr, "Failed to set non-blocking flags.\n");
+    if(set_nonblocking_fd(pty_master) == -1) {
+        fprintf(stderr, "Error setting client to non-blocking.");
     }
     
     /* Attempt to kickstart the master.
@@ -430,6 +390,35 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
     return -1;
 }
 
+int set_nonblocking_fd(int fd) {
+    
+    int fd_flags;
+
+    // Get the current fd flags.
+    if((fd_flags = fcntl(fd, F_GETFL, 0)) == -1) {
+        fprintf(stderr, "Error getting fd_flags.");
+        return -1;
+    }
+
+    // Add the non-blocking flag.
+    fd_flags |= O_NONBLOCK;
+
+    // Set the new flag set for the fd.
+    if(fcntl(fd, F_SETFL, fd_flags) == -1) {
+        fprintf(stderr, "Error setting fd_flags.");
+        return -1;
+    }
+
+    return 0;
+}
+
+// Signal handler for the handshake.
+void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
+{
+    fprintf(stdout, "Alarm has a value: %d\n", *(int *) (sip->si_ptr));
+    *(int *) sip->si_ptr = 1;
+}
+
 // Reads a messagr from a server and returns it as a string (null terminated).
 // Also handles read errors internally returning NULL if an error is encountered.
 char *read_client_message(int client_fd)
@@ -449,4 +438,24 @@ char *read_client_message(int client_fd)
   msg[nread] = '\0';
 
   return msg;
+}
+
+int transfer_data(int from, int to) {
+    
+        char buf[MAX_LENGTH];
+        static ssize_t nread;
+    
+        while((nread = read(from, buf, MAX_LENGTH)) > 0) {
+            if(write(to, buf, nread) == -1) {
+                fprintf(stderr, "Failed writing data.");
+                break;
+            }
+        }
+    
+        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+            fprintf(stderr, "Failed reading data.");
+            return -1;
+        }
+    
+        return 0;
 }
