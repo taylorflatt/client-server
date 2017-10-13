@@ -125,23 +125,23 @@ void *epoll_listener(void * ignore) {
 }
 
 int transfer_data(int from, int to) {
-
-    char buf[MAX_LENGTH];
-    static ssize_t nread;
-
-    while((nread = read(from, buf, MAX_LENGTH)) > 0) {
-        if(write(to, buf, nread) == -1) {
-            fprintf(stderr, "Failed writing data.");
-            break;
+    
+        char buf[MAX_LENGTH];
+        static ssize_t nread;
+    
+        while((nread = read(from, buf, MAX_LENGTH)) > 0) {
+            if(write(to, buf, nread) == -1) {
+                fprintf(stderr, "Failed writing data.");
+                break;
+            }
         }
-    }
-
-    if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-        fprintf(stderr, "Failed reading data.");
-        return -1;
-    }
-
-    return 0;
+    
+        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+            fprintf(stderr, "Failed reading data.");
+            return -1;
+        }
+    
+        return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -278,6 +278,7 @@ void  *handle_client(void *client_fd_ptr) {
     // Dereference the int pointer and get rid of the memory now that we no longer need it.
     int client_fd = *(int *) client_fd_ptr;
     free(client_fd_ptr);
+    pthread_detach(pthread_self());
 
     // Conduct the three-way handshake with the client.
     if(handshake(client_fd) == -1) {
