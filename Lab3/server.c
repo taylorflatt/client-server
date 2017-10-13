@@ -89,17 +89,14 @@ int main(int argc, char *argv[]) {
     ///
     /// Server will create a pthread which sits and listens for new clients and then
     /// runs the initial handshake between client/server.
-    while(1) {
-        // Collect any terminated children before attempting to accept a new connection.
-        while (waitpid(-1,NULL,WNOHANG) > 0);
-        
+    while(1) {        
         // Accept a new connection and get socket to use for client:
         client_len = sizeof(client_address);
         if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
         }
 
-
+        // Create a pointer for the file descriptor. Required for a pthread creation.
         client_fd_ptr = (int *) malloc(sizeof(int));
         *client_fd_ptr = client_fd;
         if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
@@ -140,6 +137,7 @@ int create_server() {
     return server_sockfd;
 }
 
+// Epoll loop which listens for any data transfer between the client/server.
 void *epoll_listener(void * ignore) {
 
     struct epoll_event ev_list[MAX_EVENTS];
@@ -151,6 +149,7 @@ void *epoll_listener(void * ignore) {
 
         if(events == -1) {
             if(errno == EINTR) {
+                fprintf(stderr, "I see a ^C.\n");
                 continue;
             } else {
                 fprintf(stderr, "Epoll loop error.\n");
@@ -161,15 +160,17 @@ void *epoll_listener(void * ignore) {
         printf("Epoll sees %d events \n", events);
 
         for(i = 0; i < events; i++) {
+            // If there is an event and the associated file is available for read.
             if(ev_list[i].events & EPOLLIN) {
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
                     fprintf(stderr, "Error reading/writing to the client. Closing shop.\n");
                     kill(bash_fd[ev_list[i].data.fd], SIGTERM);
-                    //close(ev_list[i].data.fd);
-                    close(client_fd_tuples[ev_list[i].data.fd]);
-                } else if(ev_list[i].events & (EPOLLHUP | EPOLLERR)) {
                     close(client_fd_tuples[ev_list[i].data.fd]);
                 }
+            } else if(ev_list[i].events & (EPOLLHUP | EPOLLERR)) {
+                fprintf(stderr, "Recd EPOLLHUP or EPOLLERR on %d -- closing it and %d\n", ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+                kill(bash_fd[ev_list[i].data.fd], SIGTERM);
+                close(client_fd_tuples[ev_list[i].data.fd]);
             }
         }
     }
@@ -177,8 +178,6 @@ void *epoll_listener(void * ignore) {
 
 // Handles the three-way handshake and starts up the create_processes method.
 void  *handle_client(void *client_fd_ptr) {
-
-    int flags;
 
     // Dereference the int pointer and get rid of the memory now that we no longer need it.
     int client_fd = *(int *) client_fd_ptr;
@@ -276,7 +275,7 @@ int handshake(int client_fd) {
 int pty_open(int client_fd, const struct termios *tty) {
     
     char * pty_slave;
-    int pty_master, err, flags;
+    int pty_master, err;
     struct epoll_event ep_ev[2];
     pid_t b_pid;
 
