@@ -114,31 +114,6 @@ int connect_server(const char *server_ip) {
     return server_fd;
 }
 
-// Creates the pty and sets the parameters such as turning off canonical mode.
-int create_tty(int fd, struct termios *prev_pty) {
-    struct termios pty;
-
-    // Gets the parameters of the pty and stores them in pty.
-    if(tcgetattr(fd, &pty) == -1) {
-        printf("Could not get the parameters associated with the pty.");
-        return -1;        
-    }
-
-    if(prev_pty != NULL)
-        *prev_pty = pty;
-
-    // Turn canonical mode off and no extended functions.
-    pty.c_lflag &= ~(ICANON|IEXTEN);
-
-    // Put terminal in raw mode after flushing.
-    if(tcsetattr(fd, TCSAFLUSH, &pty) == -1) {
-        printf("Could not set terminal parameters.\n");
-        return -1;
-    }
-
-    return 0;
-}
-
 int handshake(int server_fd) {
     
     // Receive the challenge.
@@ -198,6 +173,7 @@ char *read_handshake_messages(int client_fd)
 
 int set_tty_noncanon_noecho()
 {
+    DTRACE("%ld:Setting terminal to non-canon mode.\n",(long)getpid());
     struct termios tty_settings;
 
     // Get the current terminal settings.
@@ -210,7 +186,9 @@ int set_tty_noncanon_noecho()
     saved_tty_settings = tty_settings;
 
     // ECHO won't display the client's text as they type it with putty but ECHONL does.
-    tty_settings.c_lflag &= ~(ICANON | IEXTEN | ECHONL);
+    tty_settings.c_lflag &= ~(ICANON | IEXTEN);
+    tty_settings.c_lflag |= ISIG;
+    tty_settings.c_lflag &= ~ICRNL;
     tty_settings.c_cc[VMIN] = 1;
     tty_settings.c_cc[VTIME] = 0;
 
@@ -225,6 +203,7 @@ int set_tty_noncanon_noecho()
 
 int create_child_handler_signal() {
     
+    DTRACE("%ld:Creating child termination signal handler.\n",(long)getpid());
     struct sigaction act;
     act.sa_handler = &sigchld_handler;
     act.sa_flags = 0;
@@ -297,9 +276,6 @@ int transfer_data(int from, int to) {
         fprintf(stderr, "Failed reading data.");
         return -1;
     }
-
-    if (nread == 0)
-        DTRACE("%ld:EOF on FD %d!\n",(long)getpid(),from);
 
     return 0;
 }

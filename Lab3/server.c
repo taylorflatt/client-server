@@ -139,6 +139,7 @@ int create_server() {
 
     if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
         perror("Error assigning address to socket.");
+        return -1;
     }
 
     // Start listening to server socket.
@@ -158,7 +159,7 @@ void *epoll_listener(void * ignore) {
     int i;
 
     while(1) {
-        while (waitpid(-1,NULL,WNOHANG) > 0);
+        //while (waitpid(-1,NULL,WNOHANG) > 0);
         events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
 
         if(events == -1) {
@@ -487,6 +488,11 @@ int transfer_data(int from, int to) {
 
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         perror("Failed reading data.");
+        return -1;
+    }
+
+    if(nread == 0) {
+        DTRACE("%ld:READ NREAD=0\n",(long)getpid());
         return -1;
     }
 
