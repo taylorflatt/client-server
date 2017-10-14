@@ -60,6 +60,7 @@ void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 char *read_client_message(int client_fd);
 int transfer_data(int from, int to);
 
+int eager_write(int fd, const char * const msg, size_t len);
 
 int main(int argc, char *argv[]) {
     int client_fd, server_sockfd;
@@ -149,7 +150,8 @@ void *epoll_listener(void * ignore) {
     int i;
 
     while(1) {
-        events = epoll_wait(epoll_fd, ev_list, MAX_EVENTS, -1);
+        while (waitpid(-1,NULL,WNOHANG) > 0);
+        events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
 
         if(events == -1) {
             if(errno == EINTR) {
@@ -168,6 +170,7 @@ void *epoll_listener(void * ignore) {
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
                     fprintf(stderr, "Error reading/writing to the client. Closing shop.\n");
                     kill(bash_fd[ev_list[i].data.fd], SIGTERM);
+                    close(ev_list[i].data.fd);
                     close(client_fd_tuples[ev_list[i].data.fd]);
                 }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
@@ -244,6 +247,8 @@ int handshake(int client_fd) {
         fprintf(stderr, "Error setting handshake timer duration.\n");
     }
 
+    // TODO: Maybe find a bit better way to address comparing the alarm flag. The way it is now, it will return 
+    //        the next section's error (since that is when it is checked after read/write start blocking).
     // Sending the challenge to the client.
     if((alarm_flag || write(client_fd, CHALLENGE, strlen(CHALLENGE))) == -1) {
         fprintf(stderr, "Server took too long sending message or write failed. AlarmFlag: " + alarm_flag);
@@ -291,6 +296,9 @@ int pty_open(int client_fd, const struct termios *tty) {
         return -1;        
     }
 
+    /// Set pty master fd so it gets closed when bash execs.
+    fcntl(pty_master,F_SETFD,FD_CLOEXEC);
+
     if(set_nonblocking_fd(pty_master) == -1) {
         fprintf(stderr, "Error setting client to non-blocking.");
     }
@@ -325,6 +333,9 @@ int pty_open(int client_fd, const struct termios *tty) {
         if(create_bash_process(pty_slave, tty) == -1) {
             fprintf(stderr, "Failed to create bash process.\n");
         }
+
+        // Should never reach this point since the bash process will just terminate.
+        exit(EXIT_FAILURE);
     }
 
     printf("slave pid = %d\n", (int)b_pid);
@@ -358,44 +369,37 @@ int pty_open(int client_fd, const struct termios *tty) {
 
 int create_bash_process(char *pty_slave, const struct termios *tty) {
 
-    int slave_fd;
+    int pty_slave_fd;
 
     if(setsid() == -1) {
         printf("Could not create a new session.\n");
         return -1;            
     }
 
-    if((slave_fd = open(pty_slave, O_RDWR)) == -1) {
+    if((pty_slave_fd = open(pty_slave, O_RDWR)) == -1) {
         printf("Could not open %s\n", pty_slave);
         return -1;
     }
     
-    if(tcsetattr(slave_fd, TCSANOW, tty) == -1) {
+    if(tcsetattr(pty_slave_fd, TCSANOW, tty) == -1) {
         printf("Could not set the set the terminal parameters.\n");
         return -1;
     }
 
     printf("Setting dup\n");
-    if(dup2(slave_fd, STDIN_FILENO) < 0) {
-        fprintf(stderr, "Stdin redirection error.\n");
-        return -1;
-    }
-    if(dup2(slave_fd, STDOUT_FILENO) < 0) {
-        fprintf(stderr, "Stdout redirection error.\n");
-        return -1;
-    }
-    if(dup2(slave_fd, STDERR_FILENO) < 0) {
-        fprintf(stderr, "Stderr redirection error.\n");
-        return -1;
+    if ((dup2(pty_slave_fd,0) == -1) || (dup2(pty_slave_fd,1) == -1) || (dup2(pty_slave_fd,2) == -1)) {
+        perror("dup2() call for FD 0, 1, or 2 failed");
+        exit(EXIT_FAILURE); 
     }
 
+    close(pty_slave_fd);
     free(pty_slave);
     execlp("bash", "bash", NULL);
 
     fprintf(stderr, "Failed to exec bash!\n");
 
-    if(slave_fd > STDERR_FILENO)
-        close(slave_fd);
+    if(pty_slave_fd > STDERR_FILENO)
+        close(pty_slave_fd);
 
     return -1;
 }
@@ -453,7 +457,7 @@ char *read_client_message(int client_fd)
 int transfer_data(int from, int to) {
     
     char buf[MAX_LENGTH];
-    static ssize_t nread;
+    ssize_t nread;
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if(write(to, buf, nread) == -1) {

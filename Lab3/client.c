@@ -26,7 +26,75 @@ int create_tty(int fd, struct termios *prev_pty);
 void sigchld_handler(int signal);
 void stop(int socket, int exit_status);
 
+void handshake(int server_fd);
+int connect_server(const char *server_ip);
+
+void set_tty_noncanon_noecho();
+void restore_tty_settings();
+void cleanup_and_exit(int exit_status);
+
 pid_t cpid;
+struct termios saved_tty_settings;
+
+int handshake(int server_fd) {
+
+    // Receive the challenge.
+    if((handshake = read_server_message(server_fd)) == NULL) {
+        perror("Failed reading the challenge from the server.");
+        return -1;
+    }
+
+    //  Verify the challenge against known result.
+    if(strcmp(handshake, CHALLENGE) != 0) {
+        perror("Incorrect challenge received from the server");
+        return -1;
+    }
+
+    // Send secret to the server for verification.
+    if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
+        perror("Failed sending the secret to the server.");
+        return -1;
+    }
+
+    // Receive server verification.
+    if((handshake = read_server_message(server_fd)) == NULL) {
+        perror("Failed to receive the server's PROCEED message.");
+        return -1;
+    }
+
+    // Receive the final verification from the server to proceed.
+    if(strcmp(handshake, PROCEED) != 0) {
+        perror("The server's PROCEED message is invalid.");
+        return -1;
+    }
+
+    return 0;
+}
+
+int connect_server(const char *server_ip) {
+    int sock_fd;
+    struct sockaddr_in servaddr;
+
+    // Create client socket.
+    if((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket() failed.")
+        return -1;
+    }
+
+    // Name the socket, as agreed with the server.
+    serv_address.sin_family = AF_INET;
+    serv_address.sin_port = htons(PORT);
+    inet_aton(ip, &serv_address.sin_addr);
+
+    // Connect the client and server sockets.
+    if((connect(sock_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
+        perror("Connect() failed.");
+        return -1;
+    }
+
+    return sock_fd;
+}
+
 
 int main(int argc, char *argv[]){
     int sock_fd, numBytesRead;
@@ -43,50 +111,18 @@ int main(int argc, char *argv[]){
         strcpy(ip, argv[1]);
     }
 
-    // Create client socket.
-    if((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    // Name the socket, as agreed with the server.
-    serv_address.sin_family = AF_INET;
-    serv_address.sin_port = htons(PORT);
-    inet_aton(ip, &serv_address.sin_addr);
-
-    // Connect the client and server sockets.
-    if((connect(sock_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
-        fprintf(stderr, "Error connecting to server, error: %s\n", strerror(errno));
+    // Connect to the server.
+    if((sock_fd = connect_server(ip) == -1) {
+        perror("Failed to connect to server.");
         exit(EXIT_FAILURE);
     }
     
-    // Receive the challenge.
-    if((handshake = read_server_message(sock_fd)) == NULL) {
+    // Perform the handshake.
+    if(handshake(sock_fd) == -1) {
+        perror("Failed handshake with the server.");
         exit(EXIT_FAILURE);
     }
 
-    //  Verify the challenge against known result.
-    if(strcmp(handshake, CHALLENGE) != 0) {
-        fprintf(stderr, "Error receving challenge from server, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    // Send secret to the server for verification.
-    if((write(sock_fd, SECRET, strlen(SECRET))) == -1) {
-        fprintf(stderr, "Error sending secret to server, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    // Receive server verification.
-    if((handshake = read_server_message(sock_fd)) == NULL) {
-        exit(EXIT_FAILURE);
-    }
-
-    // Receive the final verification from the server to proceed.
-    if(strcmp(handshake, PROCEED) != 0) {
-        printf("%s", handshake);
-        exit(EXIT_FAILURE);    
-    }
 
     // Signal handler. Make sure our children don't become brain sucking zombies.
     struct sigaction act;
@@ -99,13 +135,15 @@ int main(int argc, char *argv[]){
         exit(1);
     }
 
+    set_tty_noncanon_noecho();
+
     // Setup the terminal for the client.
-    struct termios prev_pty;
-    if(create_tty(1, &prev_pty) == -1) {
-        tcsetattr(1, TCSAFLUSH, &prev_pty);
-        close(sock_fd);
-        perror("Tcsetattr failed.");
-    }
+    //struct termios prev_pty;
+   // if(create_tty(1, &prev_pty) == -1) {
+    //    tcsetattr(1, TCSAFLUSH, &prev_pty);
+    //    close(sock_fd);
+   //     perror("Tcsetattr failed.");
+//    }
 
     // TODO: Swap over to the server method of writing so I'm not using memset.
     // Create a child process.
@@ -168,13 +206,13 @@ int main(int argc, char *argv[]){
 
     // Make sure to close the connection upon exiting.
     close_socket(sock_fd);
-    tcsetattr(1, TCSAFLUSH, &prev_pty);
+    //tcsetattr(1, TCSAFLUSH, &prev_pty);
     act.sa_handler = SIG_IGN;
 
     if(sigaction(SIGCHLD, &act, NULL) == -1)
         perror("Client: Error setting SIGCHLD");
 
-    exit(EXIT_SUCCESS);
+    cleanup_and_exit(EXIT_SUCCESS);
 }
 
 // Creates the pty and sets the parameters such as turning off canonical mode.
@@ -205,8 +243,8 @@ int create_tty(int fd, struct termios *prev_pty) {
 // Kills off any children and exits.
 void sigchld_handler(int sig) {
 
-    kill(cpid, sig);
-    exit(1);
+    kill(cpid, sig);    
+    cleanup_and_exit(EXIT_SUCCESS);
 }
 
 // Closes the socket and stops the client with the appropriate exit status..
@@ -245,4 +283,53 @@ char *read_server_message(int server_fd)
 
   return msg;
 }
+
+void set_tty_noncanon_noecho()
+{
+  struct termios tty_settings;
+
+  if (tcgetattr(STDIN_FILENO, &tty_settings) == -1) {
+    perror("Getting TTY attributes failed");
+    exit(EXIT_FAILURE); }
+
+  //Save current settings so can restore:
+  saved_tty_settings = tty_settings;
+
+  tty_settings.c_lflag &= ~(ICANON | ECHO);
+  tty_settings.c_cc[VMIN] = 1;
+  tty_settings.c_cc[VTIME] = 0;
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
+    perror("Setting TTY attributes failed");
+    exit(EXIT_FAILURE); }
+
+  return;
+}
   
+
+// Restores initial TTY settings:
+void restore_tty_settings()
+{
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
+    perror("Restoring TTY attributes failed");
+    exit(EXIT_FAILURE); }
+
+  return;
+}
+
+// To be called to terminate cleanly.
+// Restores TTY settings, collects child,
+// and determines success/failure exist status.
+void cleanup_and_exit(int exit_status)
+{
+  restore_tty_settings();
+
+  //Collect child and get its exit status:
+  int childstatus;
+  wait(&childstatus);
+
+  //Determine if exit status should be failure:
+  if (exit_status==EXIT_FAILURE || !WIFEXITED(childstatus) || WEXITSTATUS(childstatus)!=EXIT_SUCCESS)
+    exit(EXIT_FAILURE);
+
+  exit(EXIT_SUCCESS);
+}
