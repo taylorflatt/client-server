@@ -29,7 +29,7 @@ int create_child_handler_signal();
 void sigchld_handler(int signal);
 void communicate_with_server(int server_fd);
 int transfer_data(int from, int to);
-void cleanup_and_exit(int exit_status);
+void graceful_exit(int exit_status);
 void restore_tty_settings();
 
 struct termios saved_tty_settings;
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]){
     // Make sure our children don't become brain sucking zombies.
     if(create_child_handler_signal() == -1) {
         perror("Error creating signal to handle zombie children.");
-        cleanup_and_exit(EXIT_FAILURE);
+        graceful_exit(EXIT_FAILURE);
     }
 
     communicate_with_server(server_fd);
@@ -83,9 +83,9 @@ int main(int argc, char *argv[]){
     // Normal termination.
     DTRACE("%ld:Client termination...\n",(long)getpid());
         if (errno)
-            cleanup_and_exit(EXIT_FAILURE);
+            graceful_exit(EXIT_FAILURE);
 
-    cleanup_and_exit(EXIT_SUCCESS);
+    graceful_exit(EXIT_SUCCESS);
 
     return 0;
 }
@@ -186,7 +186,7 @@ int set_tty_noncanon_noecho()
     saved_tty_settings = tty_settings;
 
     // ECHO won't display the client's text as they type it with putty but ECHONL does.
-    tty_settings.c_lflag &= ~(ICANON | IEXTEN);
+    tty_settings.c_lflag &= ~(ICANON | ECHO);
     tty_settings.c_lflag |= ISIG;
     tty_settings.c_lflag &= ~ICRNL;
     tty_settings.c_cc[VMIN] = 1;
@@ -221,7 +221,7 @@ int create_child_handler_signal() {
 void sigchld_handler(int sig) {
     
     DTRACE("%ld:Caught signal from subprocess termination...terminating!\n",(long)getpid());
-    cleanup_and_exit(EXIT_SUCCESS);
+    graceful_exit(EXIT_SUCCESS);
 }
 
 void communicate_with_server(int server_fd) {
@@ -238,11 +238,11 @@ void communicate_with_server(int server_fd) {
         DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
         if(transfer_data(STDIN_FILENO, server_fd) == -1) {
             perror("Error reading from stdin. ");
-            cleanup_and_exit(EXIT_FAILURE);
+            graceful_exit(EXIT_FAILURE);
         }
         DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
 
-        cleanup_and_exit(EXIT_SUCCESS);
+        graceful_exit(EXIT_SUCCESS);
     }
 
     /// PARENT PROCESS
@@ -283,7 +283,7 @@ int transfer_data(int from, int to) {
 // To be called to terminate cleanly.
 // Restores TTY settings, collects child,
 // and determines success/failure exist status.
-void cleanup_and_exit(int exit_status)
+void graceful_exit(int exit_status)
 {
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();

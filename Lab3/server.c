@@ -171,17 +171,19 @@ void *epoll_listener(void * ignore) {
             }
         }
 
-        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n",(long)getppid(), events, ev_list[0].data.fd);        
+        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n",(long)getppid(), events, ev_list[0].data.fd);
 
         for(i = 0; i < events; i++) {
             // If there is an event and the associated file is available for read.
             if(ev_list[i].events & EPOLLIN) {
+                DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n",(long)getpid(),ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
                     perror("Error reading/writing to the client. Closing shop.\n");
                     kill(bash_fd[ev_list[i].data.fd], SIGTERM);
                     close(ev_list[i].data.fd);
                     close(client_fd_tuples[ev_list[i].data.fd]);
                 }
+                DTRACE("%ld:Completed data transfer PTY-->socket\n",(long)getpid());
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 fprintf(stderr, "Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 kill(bash_fd[ev_list[i].data.fd], SIGTERM);
@@ -235,7 +237,7 @@ int handshake(int client_fd) {
     sig_ev.sigev_signo = SIGALRM;
     sig_ev.sigev_notify = SIGEV_THREAD_ID;
 
-    int alarm_flag = 0;
+    int alarm = 0;
     char *pass;
     timer_t timer_id;
 
@@ -247,7 +249,7 @@ int handshake(int client_fd) {
 
     // Setup the signal event with the appropriate flags and assign to a 
     // specific thread.
-    sig_ev.sigev_value.sival_ptr = &alarm_flag;
+    sig_ev.sigev_value.sival_ptr = &alarm;
     sig_ev._sigev_un._tid = syscall(SYS_gettid);
 
     if(timer_create(CLOCK_REALTIME, &sig_ev, &timer_id) == -1) {
@@ -261,17 +263,17 @@ int handshake(int client_fd) {
     // TODO: Maybe find a bit better way to address comparing the alarm flag. The way it is now, it will return 
     //        the next section's error (since that is when it is checked after read/write start blocking).
     // Sending the challenge to the client.
-    if((alarm_flag || write(client_fd, CHALLENGE, strlen(CHALLENGE))) == -1) {
+    if((alarm || write(client_fd, CHALLENGE, strlen(CHALLENGE))) == -1) {
         perror("Server took too long sending message or write failed.");
         return -1;
     }
 
-    if(alarm_flag || (pass = read_client_message(client_fd)) == NULL) {
+    if(alarm || (pass = read_client_message(client_fd)) == NULL) {
         perror("Client took too long sending message or read failed.");
         return -1;
     }
 
-    if(alarm_flag || strcmp(pass, SECRET) != 0) {
+    if(alarm || strcmp(pass, SECRET) != 0) {
         perror("Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
@@ -390,7 +392,7 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
         return -1;            
     }
 
-    if((pty_slave_fd = open(pty_slave, O_RDWR)) == -1) {
+    if((pty_slave_fd = open(pty_slave, O_RDWR|O_NOCTTY|O_CLOEXEC)) == -1) {
         perror("Failed opening PTY_SLAVE.");
         return -1;
     }
@@ -402,7 +404,7 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
         return -1;
     }
 
-    if ((dup2(pty_slave_fd,0) == -1) || (dup2(pty_slave_fd,1) == -1) || (dup2(pty_slave_fd,2) == -1)) {
+    if ((dup2(pty_slave_fd, STDIN_FILENO) == -1) || (dup2(pty_slave_fd, STDOUT_FILENO) == -1) || (dup2(pty_slave_fd, STDERR_FILENO) == -1)) {
         perror("dup2() call for FD 0, 1, or 2 failed");
         exit(EXIT_FAILURE); 
     }
@@ -411,7 +413,7 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
     free(pty_slave);
     execlp("bash", "bash", NULL);
 
-    perror("Failed to exec bash!");
+    DTRACE("%ld:Failed to exec bash on SLAVE_FD=%i.\n",(long)getppid(), pty_slave_fd); 
 
     return -1;
 }
@@ -478,21 +480,19 @@ int transfer_data(int from, int to) {
         }
     }
 
-    if (nread == -1) DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(),from);
-    if (nwrite == -1) DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(),to);
-
-    if(nwrite == -1 && errno == EPIPE) {
-        perror("I SEE EPIPE ERROR");
-        return -1;
-    }
-
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+        DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(),from);
         perror("Failed reading data.");
         return -1;
     }
-
+    /*
+    if(nwrite == -1 && errno == EPIPE) {
+        DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(),to);
+        return -1;
+    }
+    */
     if(nread == 0) {
-        DTRACE("%ld:READ NREAD=0\n",(long)getpid());
+        DTRACE("%ld:NREAD=0 The socket was closed.\n",(long)getpid());
         return -1;
     }
 
