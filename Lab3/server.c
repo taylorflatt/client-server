@@ -69,28 +69,28 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_address;
 
     if((server_sockfd = create_server()) == -1) {
-        fprintf(stderr, "Error creating the server.");
+        perror("Error creating the server.");
         exit(EXIT_FAILURE);
     }
 
     // Force writes to closed sockets to return an error rather than a signal.
     if(signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
-        fprintf(stderr, "Error setting SIGPIPE to SIG_IGN.\n");
+        perror("Error setting SIGPIPE to SIG_IGN.");
         exit(EXIT_FAILURE);
     }
 
     if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.\n");
+        perror("Error setting SIGCHLD to SIG_IGN.");
         exit(EXIT_FAILURE);
     }
 
     if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
-        fprintf(stderr, "Error creating EPOLL.\n");
+        perror("Error creating EPOLL.");
         exit(EXIT_FAILURE);
     }
 
     if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
-        fprintf(stderr, "Failed creating the pthread. Lack of resources or system limit encountered.\n");
+        perror("Failed creating the pthread. Lack of resources or system limit encountered.");
     }
 
     DTRACE("%ld:New EPOLL thread: TID=%ld, PID=%ld\n",(long)getppid(),(long)&thread_id,(long)getpid());
@@ -103,7 +103,7 @@ int main(int argc, char *argv[]) {
         // Accept a new connection and get socket to use for client:
         client_len = sizeof(client_address);
         if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
-            fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
+            perror("Error making connection with the client.");
         }
 
         // Create a pointer for the file descriptor. Required for a pthread creation.
@@ -124,12 +124,12 @@ int create_server() {
     struct sockaddr_in server_address;
 
     if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
+        perror("Error creating socket.");
     }
 
     int i=1;
     if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-        fprintf(stderr, "Error setting sockopt.");
+        perror("Error setting sockopt.");
         return -1;
     }
 
@@ -138,12 +138,12 @@ int create_server() {
     server_address.sin_port = htons(PORT);
 
     if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
-        fprintf(stderr, "Error assigning address to socket, error: %s\n", strerror(errno));
+        perror("Error assigning address to socket.");
     }
 
     // Start listening to server socket.
     if((listen(server_sockfd, 10)) == -1){
-        fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
+        perror("Error listening to socket.");
         return -1;
     }
 
@@ -165,18 +165,18 @@ void *epoll_listener(void * ignore) {
             if(errno == EINTR) {
                 continue;
             } else {
-                fprintf(stderr, "Epoll loop error.\n");
+                perror("Epoll loop error.");
                 exit(EXIT_FAILURE);
             }
         }
 
-        printf("Epoll sees %d events \n", events);
+        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n",(long)getppid(), events, ev_list[0].data.fd);        
 
         for(i = 0; i < events; i++) {
             // If there is an event and the associated file is available for read.
             if(ev_list[i].events & EPOLLIN) {
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
-                    fprintf(stderr, "Error reading/writing to the client. Closing shop.\n");
+                    perror("Error reading/writing to the client. Closing shop.\n");
                     kill(bash_fd[ev_list[i].data.fd], SIGTERM);
                     close(ev_list[i].data.fd);
                     close(client_fd_tuples[ev_list[i].data.fd]);
@@ -200,17 +200,17 @@ void  *handle_client(void *client_fd_ptr) {
 
     // Conduct the three-way handshake with the client.
     if(handshake(client_fd) == -1) {
-        fprintf(stderr, "Client failed the handshake.\n");
+        perror("Client failed the handshake.");
         close(client_fd);
         return NULL;
     }
 
     if(set_nonblocking_fd(client_fd) == -1) {
-        fprintf(stderr, "Error setting client to non-blocking.");
+        perror("Error setting client to non-blocking.");
     }
 
     if(pty_open(client_fd, &tty) == -1) {
-        fprintf(stderr, "Failed to open pty and start bash.\n");
+        perror("Failed to open pty and start bash.");
     }
 
     return NULL;
@@ -218,6 +218,8 @@ void  *handle_client(void *client_fd_ptr) {
 
 int handshake(int client_fd) {
     
+    DTRACE("%ld:Starting handshake with CLIENT=%d.\n",(long)getppid(), client_fd);   
+
     // Three second timer.
     static struct itimerspec timer;
     timer.it_value.tv_sec = 3;
@@ -239,7 +241,7 @@ int handshake(int client_fd) {
     sigemptyset(&sig_act.sa_mask);
 
     if(sigaction(SIGALRM, &sig_act, NULL) == -1) {
-        fprintf(stderr, "Error setting up sigaction.\n");
+        perror("Error setting up sigaction.");
     }
 
     // Setup the signal event with the appropriate flags and assign to a 
@@ -248,28 +250,28 @@ int handshake(int client_fd) {
     sig_ev._sigev_un._tid = syscall(SYS_gettid);
 
     if(timer_create(CLOCK_REALTIME, &sig_ev, &timer_id) == -1) {
-        fprintf(stderr, "Error creating handshake timer.\n");
+        perror("Error creating handshake timer.");
     }
 
     if(timer_settime(timer_id, 0, &timer, NULL) == -1) {
-        fprintf(stderr, "Error setting handshake timer duration.\n");
+        perror("Error setting handshake timer duration.");
     }
 
     // TODO: Maybe find a bit better way to address comparing the alarm flag. The way it is now, it will return 
     //        the next section's error (since that is when it is checked after read/write start blocking).
     // Sending the challenge to the client.
     if((alarm_flag || write(client_fd, CHALLENGE, strlen(CHALLENGE))) == -1) {
-        fprintf(stderr, "Server took too long sending message or write failed. AlarmFlag: " + alarm_flag);
+        perror("Server took too long sending message or write failed.");
         return -1;
     }
 
     if(alarm_flag || (pass = read_client_message(client_fd)) == NULL) {
-        fprintf(stderr, "Client took too long sending message or read failed. AlarmFlag: " + alarm_flag);
+        perror("Client took too long sending message or read failed.");
         return -1;
     }
 
     if(alarm_flag || strcmp(pass, SECRET) != 0) {
-        fprintf(stderr, "Server took too long comparing the challenge, the compare failed, or invalid secret. AlarmFlag: " + alarm_flag);
+        perror("Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     } else {
@@ -277,12 +279,14 @@ int handshake(int client_fd) {
     }
 
     if(signal(SIGALRM, SIG_IGN) == SIG_ERR) {
-        fprintf(stderr, "Failed to ignore the handshake signal.");
+        perror("Failed to ignore the handshake signal.");
     }
 
     if(timer_delete(timer_id) == -1) {
-        fprintf(stderr, "Failed to delete the handshake timer.");
+        perror("Failed to delete the handshake timer.");
     }
+
+    DTRACE("%ld:Completed handshake with CLIENT=%d.\n",(long)getppid(), client_fd);  
 
     return 0;
 }
@@ -295,12 +299,14 @@ int pty_open(int client_fd, const struct termios *tty) {
     struct epoll_event ep_ev[2];
     pid_t b_pid;
 
+    DTRACE("%ld:Opening PTY with CLIENT=%d.\n",(long)getppid(), client_fd);  
+
     /* Open an unused pty dev and store the fd for later reference.
         O_RDWR := Open pty for reading + writing. 
         O_NOCTTY := Don't make it a controlling terminal for the process. 
     */
     if((pty_master = posix_openpt(O_RDWR|O_NOCTTY|O_CLOEXEC)) == -1) {
-        fprintf(stderr, "Failed openpt.\n");
+        perror("Failed openpt.");
         return -1;        
     }
 
@@ -308,7 +314,7 @@ int pty_open(int client_fd, const struct termios *tty) {
     fcntl(pty_master,F_SETFD,FD_CLOEXEC);
 
     if(set_nonblocking_fd(pty_master) == -1) {
-        fprintf(stderr, "Error setting client to non-blocking.");
+        perror("Error setting client to non-blocking.");
     }
     
     /* Attempt to kickstart the master.
@@ -318,7 +324,6 @@ int pty_open(int client_fd, const struct termios *tty) {
         Unlockpt := Removes the internal lock placed on the slave corresponding to the pty. (This must be after grantpt).
         ptsname := Returns the name of the pty slave corresponding to the pty master referred to by pty_master. (/dev/pts/nn).
     */
-    printf("Before granting pt\n");
     if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (pty_slave = ptsname(pty_master)) == NULL) {
         err = errno;
         close(pty_master);
@@ -333,20 +338,20 @@ int pty_open(int client_fd, const struct termios *tty) {
     ///
     /// Fork off a new bash process and redirect stdin/stdout/stderr appropriately.
     if((b_pid = fork()) == 0) {
-        printf("pty_slave = %s\n", pty_slave);
+        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n",(long)getppid(), pty_master, pty_slave);  
         
         // pty_master is not needed in the child, close it.
         close(pty_master);
         close(client_fd);
         if(create_bash_process(pty_slave, tty) == -1) {
-            fprintf(stderr, "Failed to create bash process.\n");
+            perror("Failed to create bash process.");
         }
 
         // Should never reach this point since the bash process will just terminate.
         exit(EXIT_FAILURE);
     }
 
-    printf("slave pid = %d\n", (int)b_pid);
+    DTRACE("%ld:SLAVE_PID=%d.\n",(long)getppid(), (int)b_pid);  
     free(pty_slave);
 
     client_fd_tuples[client_fd] = pty_master;
@@ -363,12 +368,12 @@ int pty_open(int client_fd, const struct termios *tty) {
     ep_ev[1].events = EPOLLIN | EPOLLET;
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev) == -1) {
-        fprintf(stderr, "Error creating epoll_ctl for the client_fd.");
+        perror("Error creating epoll_ctl for the client_fd.");
         return -1;
     }
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1) == -1) {
-        fprintf(stderr, "Error creating epoll_ctl for the pty_master.");
+        perror("Error creating epoll_ctl for the pty_master.");
         return -1;
     }
     
@@ -380,21 +385,22 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
     int pty_slave_fd;
 
     if(setsid() == -1) {
-        printf("Could not create a new session.\n");
+        perror("Could not create a new session.");
         return -1;            
     }
 
     if((pty_slave_fd = open(pty_slave, O_RDWR)) == -1) {
-        printf("Could not open %s\n", pty_slave);
-        return -1;
-    }
-    
-    if(tcsetattr(pty_slave_fd, TCSANOW, tty) == -1) {
-        printf("Could not set the set the terminal parameters.\n");
+        perror("Failed opening PTY_SLAVE.");
         return -1;
     }
 
-    printf("Setting dup\n");
+    DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n",(long)getppid(), pty_slave_fd); 
+    
+    if(tcsetattr(pty_slave_fd, TCSANOW, tty) == -1) {
+        perror("Could not set the set the terminal parameters.");
+        return -1;
+    }
+
     if ((dup2(pty_slave_fd,0) == -1) || (dup2(pty_slave_fd,1) == -1) || (dup2(pty_slave_fd,2) == -1)) {
         perror("dup2() call for FD 0, 1, or 2 failed");
         exit(EXIT_FAILURE); 
@@ -404,10 +410,7 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
     free(pty_slave);
     execlp("bash", "bash", NULL);
 
-    fprintf(stderr, "Failed to exec bash!\n");
-
-    if(pty_slave_fd > STDERR_FILENO)
-        close(pty_slave_fd);
+    perror("Failed to exec bash!");
 
     return -1;
 }
@@ -418,7 +421,7 @@ int set_nonblocking_fd(int fd) {
 
     // Get the current fd flags.
     if((fd_flags = fcntl(fd, F_GETFL, 0)) == -1) {
-        fprintf(stderr, "Error getting fd_flags.");
+        perror("Error getting fd_flags.");
         return -1;
     }
 
@@ -427,7 +430,7 @@ int set_nonblocking_fd(int fd) {
 
     // Set the new flag set for the fd.
     if(fcntl(fd, F_SETFL, fd_flags) == -1) {
-        fprintf(stderr, "Error setting fd_flags.");
+        perror("Error setting fd_flags.");
         return -1;
     }
 
@@ -452,7 +455,7 @@ char *read_client_message(int client_fd)
         if (errno)
             perror("Error reading from the client socket");
         else
-            fprintf(stderr, "Client closed connection unexpectedly\n");
+            perror("Client closed connection unexpectedly\n");
             
         return NULL; 
     }
@@ -469,7 +472,7 @@ int transfer_data(int from, int to) {
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if((nwrite = write(to, buf, nread) == -1)) {
-            fprintf(stderr, "Failed writing data.");
+            perror("Failed writing data.");
             break;
         }
     }
@@ -478,12 +481,12 @@ int transfer_data(int from, int to) {
     if (nwrite == -1) DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(),to);
 
     if(nwrite == -1 && errno == EPIPE) {
-        fprintf(stderr, "I SEE EPIPE ERROR");
+        perror("I SEE EPIPE ERROR");
         return -1;
     }
 
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-        fprintf(stderr, "Failed reading data.");
+        perror("Failed reading data.");
         return -1;
     }
 
