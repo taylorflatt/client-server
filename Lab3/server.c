@@ -73,6 +73,12 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // Force writes to closed sockets to return an error rather than a signal.
+    if(signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
+        fprintf(stderr, "Error setting SIGPIPE to SIG_IGN.\n");
+        exit(EXIT_FAILURE);
+    }
+
     if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
         fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.\n");
         exit(EXIT_FAILURE);
@@ -86,6 +92,8 @@ int main(int argc, char *argv[]) {
     if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
         fprintf(stderr, "Failed creating the pthread. Lack of resources or system limit encountered.\n");
     }
+
+    DTRACE("%ld:New EPOLL thread: TID=%ld, PID=%ld\n",(long)getppid(),(long)&thread_id,(long)getpid());
 
     /// Client accept loop.
     ///
@@ -102,8 +110,10 @@ int main(int argc, char *argv[]) {
         client_fd_ptr = (int *) malloc(sizeof(int));
         *client_fd_ptr = client_fd;
         if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
-            fprintf(stderr, "Error creating the accept temporary pthread.\n");
+            perror("Error creating the temporary ACCEPT pthread.");
         }
+
+        DTRACE("%ld:New ACCEPT thread: TID=%ld, PID=%ld\n",(long)getppid(),(long)&thread_id,(long)getpid());
     }
 
     exit(EXIT_SUCCESS);
@@ -455,13 +465,21 @@ char *read_client_message(int client_fd)
 int transfer_data(int from, int to) {
     
     char buf[MAX_LENGTH];
-    ssize_t nread;
+    ssize_t nread, nwrite;
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
-        if(write(to, buf, nread) == -1) {
+        if((nwrite = write(to, buf, nread) == -1)) {
             fprintf(stderr, "Failed writing data.");
             break;
         }
+    }
+
+    if (nread == -1) DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(),from);
+    if (nwrite == -1) DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(),to);
+
+    if(nwrite == -1 && errno == EPIPE) {
+        fprintf(stderr, "I SEE EPIPE ERROR");
+        return -1;
     }
 
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {

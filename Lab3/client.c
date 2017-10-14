@@ -32,7 +32,6 @@ int transfer_data(int from, int to);
 void cleanup_and_exit(int exit_status);
 void restore_tty_settings();
 
-pid_t cpid;
 struct termios saved_tty_settings;
 
 int main(int argc, char *argv[]){
@@ -227,7 +226,7 @@ int set_tty_noncanon_noecho()
 int create_child_handler_signal() {
     
     struct sigaction act;
-    act.sa_handler = sigchld_handler;
+    act.sa_handler = &sigchld_handler;
     act.sa_flags = 0;
     sigemptyset(&act.sa_mask);
 
@@ -242,10 +241,13 @@ int create_child_handler_signal() {
 // Kills off any children and exits.
 void sigchld_handler(int sig) {
     
+    DTRACE("%ld:Caught signal from subprocess termination...terminating!\n",(long)getpid());
     cleanup_and_exit(EXIT_SUCCESS);
 }
 
 void communicate_with_server(int server_fd) {
+
+    pid_t cpid;
 
     /// CHILD PROCESS
     ///
@@ -296,6 +298,9 @@ int transfer_data(int from, int to) {
         return -1;
     }
 
+    if (nread == 0)
+        DTRACE("%ld:EOF on FD %d!\n",(long)getpid(),from);
+
     return 0;
 }
 
@@ -304,25 +309,34 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void cleanup_and_exit(int exit_status)
 {
-  restore_tty_settings();
+    DTRACE("%ld:Started exit procedure.\n",(long)getpid());
+    restore_tty_settings();
 
-  //Collect child and get its exit status:
-  int childstatus;
-  wait(&childstatus);
+    //Collect child and get its exit status:
+    DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
+    wait(&childstatus);
 
-  //Determine if exit status should be failure:
-  if (exit_status==EXIT_FAILURE || !WIFEXITED(childstatus) || WEXITSTATUS(childstatus)!=EXIT_SUCCESS)
-    exit(EXIT_FAILURE);
+    //Determine if exit status should be failure:
+    if (exit_status==EXIT_FAILURE || !WIFEXITED(childstatus) || WEXITSTATUS(childstatus)!=EXIT_SUCCESS) {
+        DTRACE("%ld:Error cleaning up children.\n",(long)getpid());
+        exit(EXIT_FAILURE);
+    }
 
-  exit(EXIT_SUCCESS);
+        DTRACE("%ld:Successfully cleaned up children. Exiting...\n",(long)getpid());
+
+    exit(EXIT_SUCCESS);
 }
 
 // Restores initial TTY settings:
 void restore_tty_settings()
 {
-  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
-    perror("Restoring TTY attributes failed");
-    exit(EXIT_FAILURE); }
+    DTRACE("%ld:Restoring TTY settings.\n",(long)getpid());
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
+        DTRACE("%ld:Failed restoring TTY settings.\n",(long)getpid());
+        perror("Restoring TTY attributes failed");
+        exit(EXIT_FAILURE);
+    }
 
-  return;
+    return;
 }
