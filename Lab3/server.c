@@ -2,8 +2,7 @@
 ///
 /// Pthreads: -pthread
 /// Timers: -lrt
-/// Sample: gcc -Wall -pthread -lrt -o server server.c
-
+/// Sample: gcc -Wall -pthread -lrt -DDEBUG -o server server.c
 
 #define _POSIX_C_SOURCE 200809L // Required for timers.
 #define _XOPEN_SOURCE 700 // Required for pty.
@@ -29,6 +28,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include "DTRACE.h"
 
 //Preprocessor constants
 #define PORT 4070
@@ -59,8 +59,6 @@ int set_nonblocking_fd(int fd);
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 char *read_client_message(int client_fd);
 int transfer_data(int from, int to);
-
-int eager_write(int fd, const char * const msg, size_t len);
 
 int main(int argc, char *argv[]) {
     int client_fd, server_sockfd;
