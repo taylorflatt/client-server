@@ -399,11 +399,6 @@ int create_bash_process(char *pty_slave, const struct termios *tty) {
 
     DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n",(long)getppid(), pty_slave_fd); 
     
-    if(tcsetattr(pty_slave_fd, TCSANOW, tty) == -1) {
-        perror("Could not set the set the terminal parameters.");
-        return -1;
-    }
-
     if ((dup2(pty_slave_fd, STDIN_FILENO) == -1) || (dup2(pty_slave_fd, STDOUT_FILENO) == -1) || (dup2(pty_slave_fd, STDERR_FILENO) == -1)) {
         perror("dup2() call for FD 0, 1, or 2 failed");
         exit(EXIT_FAILURE); 
