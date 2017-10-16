@@ -69,9 +69,8 @@ int transfer_data(int from, int to);
 void graceful_exit(int exit_status);
 
 /* Global Variables */
-/* A map to store the fd for pty/socket and bash_fd. */
+/* A map to store the fd for pty/socket. */
 int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
-pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 int epoll_fd;
 
 int main(int argc, char *argv[]) {
@@ -398,9 +397,6 @@ int open_pty(int client_fd) {
 
     client_fd_tuples[client_fd] = pty_master;
     client_fd_tuples[pty_master] = client_fd;
-
-    bash_fd[client_fd] = b_pid;
-    bash_fd[pty_master] = b_pid;
 
     /* Setup the epoll event handling (R/W). */
     ep_ev[0].data.fd = client_fd;
