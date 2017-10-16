@@ -18,7 +18,7 @@
 #define PORT 4070
 #define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
-#define PROCEED "<ok>\n"
+#define PROCEED "THISISWRONG!\n"
 
 //Prototypes
 int connect_server(const char *server_ip);
@@ -141,6 +141,9 @@ int handshake(int server_fd) {
         return -1;
     }
 
+    ///
+    /// FAILURE POINT
+    ///
     // Receive the final verification from the server to proceed.
     if(strcmp(h_msg, PROCEED) != 0) {
         perror("The server's PROCEED message is invalid.");
@@ -285,12 +288,12 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void graceful_exit(int exit_status)
 {
-    int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
     wait(&childstatus);
 
     //Determine if exit status should be failure:

@@ -94,15 +94,19 @@ int connect_server(const char *server_ip) {
     int server_fd;
     struct sockaddr_in serv_address;
 
+
     // Create client socket.
     if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket() failed.");
         return -1;
     }
 
+    ///
+    /// FAILURE POINT
+    ///
     // Name the socket, as agreed with the server.
     serv_address.sin_family = AF_INET;
-    serv_address.sin_port = htons(PORT);
+    serv_address.sin_port = htons(6000);
     inet_aton(server_ip, &serv_address.sin_addr);
 
     // Connect the client and server sockets.
@@ -285,12 +289,12 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void graceful_exit(int exit_status)
 {
-    int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
     wait(&childstatus);
 
     //Determine if exit status should be failure:

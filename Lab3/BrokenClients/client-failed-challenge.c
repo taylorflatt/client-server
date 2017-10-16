@@ -17,7 +17,7 @@
 #define MAX_LENGTH 4096
 #define PORT 4070
 #define SECRET "cs407rembash\n"
-#define CHALLENGE "<rembash>\n"
+#define CHALLENGE "THISISWRONG!\n"
 #define PROCEED "<ok>\n"
 
 //Prototypes
@@ -123,6 +123,9 @@ int handshake(int server_fd) {
         return -1;
     }
 
+    ///
+    /// FAILURE POINT
+    ///
     //  Verify the challenge against known result.
     if(strcmp(h_msg, CHALLENGE) != 0) {
         perror("Incorrect challenge received from the server");
@@ -285,12 +288,12 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void graceful_exit(int exit_status)
 {
-    int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
     wait(&childstatus);
 
     //Determine if exit status should be failure:

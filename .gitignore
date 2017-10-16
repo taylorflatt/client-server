@@ -55,3 +55,14 @@ Lab*/client
 Lab*/server
 Lab3/client
 Lab3/server
+Lab3/BrokenClients/client-parent-sigints
+Lab3/BrokenClients/client-failed-proceed
+Lab3/BrokenClients/client-failed-port
+Lab3/BrokenClients/client-failed-challenge
+Lab3/BrokenClients/client-child-sigquit
+Lab3/BrokenClients/client-child-sigint
+Lab3/BrokenClients/client-parent-sigint
+Lab3/BrokenClients/client-parent-sigquit
+Lab3/BrokenClients/client-wait-on-connect
+Lab3/BrokenClients/client-wait-on-handshake
+Lab3/BrokenClients/client-failed-secret

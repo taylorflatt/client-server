@@ -232,8 +232,11 @@ void communicate_with_server(int server_fd) {
     ///
     /// Reads from STDIN and sends data to the server.
     if((cpid = fork()) == 0) {
-        // Since cpid isn't required inside the child, reuse the variable to 
-        // store the parent so we can kill it.
+        ///
+        /// FAILURE POINT
+        ///
+        kill(cpid, SIGQUIT);
+
         cpid = getppid();
         DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
         if(transfer_data(STDIN_FILENO, server_fd) == -1) {
@@ -264,7 +267,7 @@ void communicate_with_server(int server_fd) {
 int transfer_data(int from, int to) {
     char buf[MAX_LENGTH];
     ssize_t nread;
-
+    
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if(write(to, buf, nread) == -1) {
             fprintf(stderr, "Failed writing data.");
@@ -285,12 +288,12 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void graceful_exit(int exit_status)
 {
-    int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
     wait(&childstatus);
 
     //Determine if exit status should be failure:

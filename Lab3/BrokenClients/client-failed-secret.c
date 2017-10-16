@@ -16,7 +16,7 @@
 // Preprocessor Constants
 #define MAX_LENGTH 4096
 #define PORT 4070
-#define SECRET "cs407rembash\n"
+#define SECRET "THISISWRONG!\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 
@@ -129,6 +129,9 @@ int handshake(int server_fd) {
         return -1;
     }
 
+    ///
+    /// FAILURE POINT
+    ///
     // Send secret to the server for verification.
     if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
         perror("Failed sending the secret to the server.");
@@ -285,12 +288,12 @@ int transfer_data(int from, int to) {
 // and determines success/failure exist status.
 void graceful_exit(int exit_status)
 {
-    int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    int childstatus;
     wait(&childstatus);
 
     //Determine if exit status should be failure:
