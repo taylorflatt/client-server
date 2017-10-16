@@ -3,18 +3,18 @@
  * Author: Taylor Flatt
  * 
  * Properties:
- *   -- uses plain read() with initial protocol exchange
+ *   -- uses plain read() with initial protocol exchange.
  *   -- uses two subprocesses for commands-shell exchange:
- *           (parent) read from socket and write to stdout
- *           (child)  read from stdin and write to socket
- *   -- uses read()/write() for all I/O
- *   -- assumes all write()'s are done in full (no partials), which is true since blocking mode
- *   -- setups up SIGCHLD handler to deal with premature child process termination
- *   -- parent always collects child before termination
- *   -- TTY changed to noncanonical mode
- *  -- TTY reset to canonical mode before termination
+ *           (parent) read from socket and write to stdout.
+ *           (child)  read from stdin and write to socket.
+ *   -- uses read()/write() for all I/O.
+ *   -- assumes all write()'s are done in full (no partials), which is true since blocking mode.
+ *   -- setups up SIGCHLD handler to deal with premature child process termination.
+ *   -- parent always collects child before termination.
+ *   -- TTY changed to noncanonical mode.
+ *  -- TTY reset to canonical mode before termination.
  * 
- * usage: client SERVER_IP_ADDRESS
+ * Usage: client SERVER_IP_ADDRESS
 */
 
 #include <sys/socket.h>
