@@ -8,4 +8,4 @@ clientD:
 	gcc -Wall -DDEBUG -o client client.c
 
 serverD:
-	gcc -Wall -pthread -lrt -DDEBUG -o server server.c
+	gcc -Wall -pthread -DDEBUG -lrt  -o server server.c
