@@ -60,7 +60,7 @@ int create_server();
 void *epoll_listener(void * ignore);
 void *handle_client(void *client_fd_ptr);
 int handshake(int client_fd);
-int pty_open(int client_fd);
+int open_pty(int client_fd);
 int create_bash_process(char *pty_slave);
 int set_nonblocking_fd(int fd);
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
@@ -79,48 +79,48 @@ int main(int argc, char *argv[]) {
     pthread_t thread_id;
 
     if((server_sockfd = create_server()) == -1) {
-        perror("Error creating the server.");
+        perror("(Main) create_server(): Error creating the server.");
         exit(EXIT_FAILURE);
     }
 
     /* Forces writes to closed sockets to return an error rather than a signal. */
     if(signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
-        perror("Error setting SIGPIPE to SIG_IGN.");
+        perror("(Main) signal(): Error setting SIGPIPE to SIG_IGN.");
         exit(EXIT_FAILURE);
     }
 
     /* Forces child processes to be automatically discarded when they terminate. */
     if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        perror("Error setting SIGCHLD to SIG_IGN.");
+        perror("(Main) signal(): Error setting SIGCHLD to SIG_IGN.");
         exit(EXIT_FAILURE);
     }
 
     if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
-        perror("Error creating EPOLL.");
+        perror("(Main) epoll_create1(): Error creating EPOLL.");
         exit(EXIT_FAILURE);
     }
 
     if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
-        perror("Failed creating the pthread. Lack of resources or system limit encountered.");
+        perror("(Main) pthread_create(): Failed creating the pthread. Lack of resources or system limit encountered.");
     }
 
-    DTRACE("%ld:New EPOLL thread: TID=%ld, PID=%ld\n",(long)getppid(),(long)&thread_id,(long)getpid());
+    DTRACE("%ld:New EPOLL thread: TID=%ld, PID=%ld\n", (long)getppid(), (long)&thread_id, (long)getpid());
 
     /* CLIENT ACCEPT LOOP */
     while(1) {
 
         if((client_fd = accept(server_sockfd, (struct sockaddr *) NULL, NULL)) == -1) {
-            perror("Error making a connection with the client.");
+            perror("(Main) accept(): Error making a connection with the client.");
         }
 
         /* Create a pointer for the fd. Required for a pthread creation. */
         client_fd_ptr = (int *) malloc(sizeof(int));
         *client_fd_ptr = client_fd;
         if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
-            perror("Error creating the temporary ACCEPT pthread.");
+            perror("(Main) pthread_create(): Error creating the temporary ACCEPT pthread.");
         }
 
-        DTRACE("%ld:New ACCEPT thread: TID=%ld, PID=%ld\n",(long)getppid(),(long)&thread_id,(long)getpid());
+        DTRACE("%ld:New ACCEPT thread: TID=%ld, PID=%ld\n", (long)getppid(), (long)&thread_id, (long)getpid());
     }
 
     exit(EXIT_SUCCESS);
@@ -135,12 +135,12 @@ int create_server() {
     struct sockaddr_in server_address;
 
     if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Error creating socket.");
+        perror("(create_server) socket(): Error creating socket.");
     }
 
     int i=1;
     if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-        perror("Error setting sockopt.");
+        perror("(create_server) setsockopt(): Error setting sockopt.");
         return -1;
     }
 
@@ -150,12 +150,12 @@ int create_server() {
     server_address.sin_port = htons(PORT);
 
     if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
-        perror("Error assigning address to socket.");
+        perror("(create_server) bind(): Error assigning address to socket.");
         return -1;
     }
 
     if((listen(server_sockfd, 10)) == -1){
-        perror("Error listening to socket.");
+        perror("(create_server) listen(): Error listening to socket.");
         return -1;
     }
 
@@ -183,25 +183,25 @@ void *epoll_listener(void * ignore) {
             if(errno == EINTR) {
                 continue;
             } else {
-                perror("Epoll loop error.");
+                perror("(epoll_listener) events_errno: Epoll loop error.");
                 exit(EXIT_FAILURE);
             }
         }
 
-        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n",(long)getppid(), events, ev_list[0].data.fd);
+        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
 
         for(i = 0; i < events; i++) {
             /* Check if there is an event and the associated fd is available for reading. */
             if(ev_list[i].events & EPOLLIN) {
-                DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n",(long)getpid(),ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+                DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n", (long)getpid(),ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
-                    perror("Error reading/writing to the client. Closing shop.\n");
+                    perror("(epoll_listener) transfer_data(): Error reading/writing to the client. Shutting down client's connections.\n");
                     close(ev_list[i].data.fd);
                     close(client_fd_tuples[ev_list[i].data.fd]);
                 }
-                DTRACE("%ld:Completed data transfer PTY-->socket\n",(long)getpid());
+                DTRACE("%ld:Completed data transfer PTY-->socket\n", (long)getpid());
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
-                fprintf(stderr, "Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+                DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", (long)getpid(), ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 close(client_fd_tuples[ev_list[i].data.fd]);
             }
         }
@@ -224,17 +224,17 @@ void  *handle_client(void *client_fd_ptr) {
     pthread_detach(pthread_self());
 
     if(handshake(client_fd) == -1) {
-        perror("Client failed the handshake.");
+        perror("(handle_client) handshake(): Client failed the handshake.");
         close(client_fd);
         return NULL;
     }
 
     if(set_nonblocking_fd(client_fd) == -1) {
-        perror("Error setting client to non-blocking.");
+        perror("(handle_client) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
 
-    if(pty_open(client_fd) == -1) {
-        perror("Failed to open pty and start bash.");
+    if(open_pty(client_fd) == -1) {
+        perror("(handle_client) open_pty(): Failed to open pty and start bash.");
     }
 
     return NULL;
@@ -250,7 +250,7 @@ void  *handle_client(void *client_fd_ptr) {
 */
 int handshake(int client_fd) {
     
-    DTRACE("%ld:Starting handshake with CLIENT=%d.\n",(long)getppid(), client_fd);   
+    DTRACE("%ld:Starting handshake with CLIENT=%d.\n", (long)getppid(), client_fd);   
 
     /* Three second timer. */
     static struct itimerspec timer;
@@ -272,51 +272,53 @@ int handshake(int client_fd) {
     sigemptyset(&sig_act.sa_mask);
 
     if(sigaction(SIGALRM, &sig_act, NULL) == -1) {
-        perror("Error setting up sigaction.");
+        perror("(handshake) sigaction(): Error setting up sigaction.");
     }
 
     /* Set the timer to the specific thread. */
     sig_ev.sigev_value.sival_ptr = &alarm;
     sig_ev._sigev_un._tid = syscall(SYS_gettid);
 
+    if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
+        perror("(handshake) write(): Server took too long sending message or write failed.");
+        return -1;
+    }
+
     if(timer_create(CLOCK_REALTIME, &sig_ev, &timer_id) == -1) {
-        perror("Error creating handshake timer.");
+        perror("(handshake) timer_create(): Error creating handshake timer.");
     }
 
     if(timer_settime(timer_id, 0, &timer, NULL) == -1) {
-        perror("Error setting handshake timer duration.");
+        perror("(handshake) timer_settime(): Error setting handshake timer duration.");
     }
 
-    // TODO: Maybe find a bit better way to address comparing the alarm flag. The way it is now, it will return 
-    //        the next section's error (since that is when it is checked after read/write start blocking).
-    // Sending the challenge to the client.
-    if((alarm || write(client_fd, CHALLENGE, strlen(CHALLENGE))) == -1) {
-        perror("Server took too long sending message or write failed.");
+    if((pass = read_client_message(client_fd)) == NULL) {
+        perror("(handshake) read_client_message(): Reading the client's password failed.");
         return -1;
     }
 
-    if(alarm || (pass = read_client_message(client_fd)) == NULL) {
-        perror("Client took too long sending message or read failed.");
+    if(alarm) {
+        perror("(handshake) alarm: Client took too long sending the password.");
         return -1;
     }
 
-    if(alarm || strcmp(pass, SECRET) != 0) {
-        perror("Server took too long comparing the challenge, the compare failed, or invalid secret.");
+    if(signal(SIGALRM, SIG_IGN) == SIG_ERR) {
+        perror("(handshake) signal(): Failed to ignore the handshake signal.");
+    }
+
+    if(timer_delete(timer_id) == -1) {
+        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
+    }
+
+    if(strcmp(pass, SECRET) != 0) {
+        perror("(handshake) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     } else {
         write(client_fd, PROCEED, strlen(PROCEED));
     }
 
-    if(signal(SIGALRM, SIG_IGN) == SIG_ERR) {
-        perror("Failed to ignore the handshake signal.");
-    }
-
-    if(timer_delete(timer_id) == -1) {
-        perror("Failed to delete the handshake timer.");
-    }
-
-    DTRACE("%ld:Completed handshake with CLIENT=%d.\n",(long)getppid(), client_fd);  
+    DTRACE("%ld:Completed handshake with CLIENT=%d.\n", (long)getppid(), client_fd);  
 
     return 0;
 }
@@ -328,14 +330,14 @@ int handshake(int client_fd) {
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
 */
-int pty_open(int client_fd) {
+int open_pty(int client_fd) {
     
     char * pty_slave;
     int pty_master, err;
     struct epoll_event ep_ev[2];
     pid_t b_pid;
 
-    DTRACE("%ld:Opening PTY with CLIENT=%d.\n",(long)getppid(), client_fd);  
+    DTRACE("%ld:Opening PTY with CLIENT=%d.\n", (long)getppid(), client_fd);  
 
     /** Open an unused pty dev and store the fd for later reference.
      * 
@@ -344,7 +346,7 @@ int pty_open(int client_fd) {
      * O_CLOEXEC = Close the fd on exec.
     */
     if((pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
-        perror("Failed openpt.");
+        perror("(open_pty) posix_openpt(): Failed openpt.");
         return -1;        
     }
 
@@ -352,7 +354,7 @@ int pty_open(int client_fd) {
     fcntl(pty_master, F_SETFD, FD_CLOEXEC);
 
     if(set_nonblocking_fd(pty_master) == -1) {
-        perror("Error setting client to non-blocking.");
+        perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
     
     /** Attempt to kickstart the master.
@@ -378,20 +380,20 @@ int pty_open(int client_fd) {
 
     /* Create bash subprocess. */
     if((b_pid = fork()) == 0) {
-        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n",(long)getppid(), pty_master, pty_slave);  
+        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n", (long)getppid(), pty_master, pty_slave);  
         
         close(pty_master);  /* No longer needed. Close it. */
         close(client_fd);   /* No longer needed. Close it. */
 
         if(create_bash_process(pty_slave) == -1) {
-            perror("Failed to create bash process.");
+            perror("(open_pty) create_bash_process(): Failed to create bash process.");
         }
 
         /* It should never reach this point. */
         exit(EXIT_FAILURE);
     }
 
-    DTRACE("%ld:SLAVE_PID=%d.\n",(long)getppid(), (int)b_pid);  
+    DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), (int)b_pid);  
     free(pty_slave);
 
     client_fd_tuples[client_fd] = pty_master;
@@ -408,12 +410,12 @@ int pty_open(int client_fd) {
     ep_ev[1].events = EPOLLIN | EPOLLET;
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev) == -1) {
-        perror("Error creating epoll_ctl for the client_fd.");
+        perror("(open_pty) epoll_ctl(): Error creating epoll_ctl for the client_fd.");
         return -1;
     }
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1) == -1) {
-        perror("Error creating epoll_ctl for the pty_master.");
+        perror("(open_pty) epoll_ctl(): Error creating epoll_ctl for the pty_master.");
         return -1;
     }
     
@@ -431,7 +433,7 @@ int create_bash_process(char *pty_slave) {
     int pty_slave_fd;
 
     if(setsid() == -1) {
-        perror("Could not create a new session.");
+        perror("(create_bash_process) setsid(): Could not create a new session.");
         return -1;            
     }
 
@@ -442,14 +444,14 @@ int create_bash_process(char *pty_slave) {
      * O_CLOEXEC = Close the fd on exec.
     */
     if((pty_slave_fd = open(pty_slave, O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
-        perror("Failed opening PTY_SLAVE.");
+        perror("(create_bash_process) open(): Failed opening PTY_SLAVE.");
         return -1;
     }
 
-    DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n",(long)getppid(), pty_slave_fd); 
+    DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
     
     if ((dup2(pty_slave_fd, STDIN_FILENO) == -1) || (dup2(pty_slave_fd, STDOUT_FILENO) == -1) || (dup2(pty_slave_fd, STDERR_FILENO) == -1)) {
-        perror("dup2() call for FD 0, 1, or 2 failed");
+        perror("(create_bash_process) dup2(): Redirecting FD 0, 1, or 2 failed");
         exit(EXIT_FAILURE); 
     }
 
@@ -457,7 +459,7 @@ int create_bash_process(char *pty_slave) {
     free(pty_slave);
     execlp("bash", "bash", NULL);
 
-    DTRACE("%ld:Failed to exec bash on SLAVE_FD=%i.\n",(long)getppid(), pty_slave_fd); 
+    DTRACE("%ld:Failed to exec bash on SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
 
     return -1;
 }
@@ -468,7 +470,7 @@ int set_nonblocking_fd(int fd) {
 
     /* Get the current fd's flags. */
     if((fd_flags = fcntl(fd, F_GETFL, 0)) == -1) {
-        perror("Error getting fd_flags.");
+        perror("(set_nonblocking_fd) fcntl(): Error getting fd_flags.");
         return -1;
     }
 
@@ -477,7 +479,7 @@ int set_nonblocking_fd(int fd) {
 
     /* Overwrite the fd's flags. */
     if(fcntl(fd, F_SETFL, fd_flags) == -1) {
-        perror("Error setting fd_flags.");
+        perror("(set_nonblocking_fd) fcntl(): Error setting fd_flags.");
         return -1;
     }
 
@@ -495,8 +497,8 @@ int set_nonblocking_fd(int fd) {
 */
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
 {
-    fprintf(stdout, "Alarm has a value: %d\n", *(int *) (sip->si_ptr));
     *(int *) sip->si_ptr = 1;
+    DTRACE("%ld:Has alarm value: %d\n", (long)getpid(), *(int *) (sip->si_ptr));
 }
 
 /** Reads the handshake messages.
@@ -513,9 +515,9 @@ char *read_client_message(int client_fd)
   
     if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
         if (errno)
-            perror("Error reading from the client socket");
+            perror("(read_client_message) read(): Error reading from the client socket");
         else
-            perror("Client closed connection unexpectedly\n");
+            perror("read_client_message() read(): Client closed connection unexpectedly\n");
             
         return NULL; 
     }
@@ -542,14 +544,14 @@ int transfer_data(int from, int to) {
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if((nwrite = write(to, buf, nread) == -1)) {
-            perror("Failed writing data.");
+            perror("(transfer_data) write(): Failed writing data.");
             break;
         }
     }
 
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-        DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(),from);
-        perror("Failed reading data.");
+        DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
+        perror("(transfer_data) nread_errno: Failed reading data.");
         return -1;
     }
     /*
@@ -559,7 +561,7 @@ int transfer_data(int from, int to) {
     }
     */
     if(nread == 0) {
-        DTRACE("%ld:NREAD=0 The socket was closed.\n",(long)getpid());
+        DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
         return -1;
     }
 
