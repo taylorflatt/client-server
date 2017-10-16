@@ -66,6 +66,7 @@ int set_nonblocking_fd(int fd);
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 char *read_client_message(int client_fd);
 int transfer_data(int from, int to);
+void graceful_exit(int exit_status);
 
 /* Global Variables */
 /* A map to store the fd for pty/socket and bash_fd. */
@@ -138,7 +139,7 @@ int create_server() {
         perror("(create_server) socket(): Error creating socket.");
     }
 
-    int i=1;
+    int i = 1;
     if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
         perror("(create_server) setsockopt(): Error setting sockopt.");
         return -1;
@@ -196,13 +197,12 @@ void *epoll_listener(void * ignore) {
                 DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n", (long)getpid(),ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
                 if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
                     perror("(epoll_listener) transfer_data(): Error reading/writing to the client. Shutting down client's connections.\n");
-                    close(ev_list[i].data.fd);
-                    close(client_fd_tuples[ev_list[i].data.fd]);
+                    graceful_exit(ev_list[i].data.fd);
                 }
                 DTRACE("%ld:Completed data transfer PTY-->socket\n", (long)getpid());
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", (long)getpid(), ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
-                close(client_fd_tuples[ev_list[i].data.fd]);
+                graceful_exit(ev_list[i].data.fd);
             }
         }
     }
@@ -498,7 +498,7 @@ int set_nonblocking_fd(int fd) {
 void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
 {
     *(int *) sip->si_ptr = 1;
-    DTRACE("%ld:Has alarm value: %d\n", (long)getpid(), *(int *) (sip->si_ptr));
+    //DTRACE("%ld:Has alarm value: %d\n", (long)getpid(), *(int *) (sip->si_ptr));
 }
 
 /** Reads the handshake messages.
@@ -566,4 +566,21 @@ int transfer_data(int from, int to) {
     }
 
     return 0;
+}
+
+/** Called in order to close file descriptors when the client is finished.
+ * 
+ * fd: An integer representing the file descriptor that will be closed.
+ * 
+ * Returns: None.
+*/
+void graceful_exit(int fd) {
+    
+    DTRACE("%ld:Started exit procedure.\n", (long)getpid());
+
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)fd);
+    close(fd);
+
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)client_fd_tuples[fd]);
+    close(client_fd_tuples[fd]);
 }

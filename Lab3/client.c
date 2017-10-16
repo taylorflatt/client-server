@@ -67,7 +67,7 @@ int main(int argc, char *argv[]){
         strcpy(ip, argv[1]);
     }
 
-    DTRACE("Client starting: PID=%ld, PGID=%ld, SID=%ld\n",(long)getpid(),(long)getpgrp(),(long)getsid(0));
+    DTRACE("Client starting: PID=%ld, PGID=%ld, SID=%ld\n", (long)getpid(), (long)getpgrp(), (long)getsid(0));
 
     if((server_fd = connect_server(ip)) == -1) {
         perror("(main) connect_server(): Failed to connect to server.");
@@ -98,7 +98,7 @@ int main(int argc, char *argv[]){
     communicate_with_server(server_fd);
 
     // Normal termination.
-    DTRACE("%ld:Client termination...\n",(long)getpid());
+    DTRACE("%ld:Client termination...\n", (long)getpid());
     if (errno)
         graceful_exit(EXIT_FAILURE);
 
@@ -217,7 +217,7 @@ char *read_handshake_messages(int client_fd)
 */
 int set_tty_noncanon_noecho()
 {
-    DTRACE("%ld:Setting terminal to non-canon mode.\n",(long)getpid());
+    DTRACE("%ld:Setting terminal to non-canon mode.\n", (long)getpid());
     struct termios tty_settings;
 
     // Get the current terminal settings.
@@ -251,7 +251,7 @@ int set_tty_noncanon_noecho()
 */
 int create_child_handler_signal() {
     
-    DTRACE("%ld:Creating child termination signal handler.\n",(long)getpid());
+    DTRACE("%ld:Creating child termination signal handler.\n", (long)getpid());
     struct sigaction act;
     act.sa_handler = &sigchld_handler;
     act.sa_flags = 0;
@@ -272,7 +272,7 @@ int create_child_handler_signal() {
 */
 void sigchld_handler(int sig) {
     
-    DTRACE("%ld:Caught signal from subprocess termination...terminating!\n",(long)getpid());
+    DTRACE("%ld:Caught signal from subprocess termination...terminating!\n", (long)getpid());
     graceful_exit(EXIT_SUCCESS);
 }
 
@@ -293,24 +293,24 @@ void communicate_with_server(int server_fd) {
     if((cpid = fork()) == 0) {
         cpid = getppid();   /* Reuse since the child's pid isn't required here. */
 
-        DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
+        DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n", (long)getpid(), server_fd);
         if(transfer_data(STDIN_FILENO, server_fd) == -1) {
             perror("(communicate_with_server) transfer_data(): Error reading from stdin. ");
             graceful_exit(EXIT_FAILURE);
         }
-        DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
+        DTRACE("%ld:Completed data transfer stdin-->socket\n", (long)getpid());
 
         graceful_exit(EXIT_SUCCESS);
     }
 
     /* PARENT PROCESS */
-    DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
+    DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n", (long)getpid(), server_fd);
     if(transfer_data(server_fd, STDOUT_FILENO) == -1) {
         perror("(communicate_with_server) transfer_data(): Error reading from the server and writing to STDOUT.");
     }
-    DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
+    DTRACE("%ld:Completed data transfer socket-->stdout\n", (long)getpid());
 
-    DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n",(long)getpid(),(long)cpid);
+    DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n", (long)getpid(), (long)cpid);
     signal(SIGCHLD, SIG_IGN);
     kill(cpid, SIGTERM);
 
@@ -357,22 +357,22 @@ int transfer_data(int from, int to) {
 void graceful_exit(int exit_status)
 {
     int childstatus;
-    DTRACE("%ld:Started exit procedure.\n",(long)getpid());
+    DTRACE("%ld:Started exit procedure.\n", (long)getpid());
     restore_tty_settings();
 
     /* Collect any children and get their exit statuses. */
-    DTRACE("%ld:Cleaning up children.\n",(long)getpid());
+    DTRACE("%ld:Cleaning up children.\n", (long)getpid());
     wait(&childstatus);
 
     if(!WIFEXITED(childstatus) || WEXITSTATUS(childstatus) != EXIT_SUCCESS) {
-        DTRACE("%ld:Error cleaning up children.\n",(long)getpid());
+        DTRACE("%ld:Error cleaning up children.\n", (long)getpid());
         exit(EXIT_FAILURE);
     }
 
     if (exit_status == EXIT_FAILURE)
         exit(EXIT_FAILURE);
 
-    DTRACE("%ld:Successfully cleaned up children. Exiting...\n",(long)getpid());
+    DTRACE("%ld:Successfully cleaned up children. Exiting...\n", (long)getpid());
 
     exit(EXIT_SUCCESS);
 }
@@ -385,10 +385,10 @@ void graceful_exit(int exit_status)
 */
 void restore_tty_settings()
 {
-    DTRACE("%ld:Restoring TTY settings.\n",(long)getpid());
+    DTRACE("%ld:Restoring TTY settings.\n", (long)getpid());
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
-        DTRACE("%ld:Failed restoring TTY settings.\n",(long)getpid());
+        DTRACE("%ld:Failed restoring TTY settings.\n", (long)getpid());
         perror("(restore_tty_settings) tcsetattr(): Restoring TTY attributes failed");
         exit(EXIT_FAILURE);
     }
