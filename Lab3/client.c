@@ -70,7 +70,7 @@ int main(int argc, char *argv[]){
     DTRACE("Client starting: PID=%ld, PGID=%ld, SID=%ld\n",(long)getpid(),(long)getpgrp(),(long)getsid(0));
 
     if((server_fd = connect_server(ip)) == -1) {
-        perror("Failed to connect to server.");
+        perror("(main) connect_server(): Failed to connect to server.");
         exit(EXIT_FAILURE);
     }
 
@@ -80,18 +80,18 @@ int main(int argc, char *argv[]){
     signal(SIGPIPE, SIG_IGN);
     
     if(handshake(server_fd) == -1) {
-        perror("Failed handshake with the server.");
+        perror("(main) handshake(): Failed handshake with the server.");
         exit(EXIT_FAILURE);
     }
 
     if(set_tty_noncanon_noecho() == -1) {
-        perror("Failed setting client's terminal settings.");
+        perror("(main) set_tty_noncanon_noecho(): Failed setting client's terminal settings.");
         exit(EXIT_FAILURE);
     }
 
     /* Make sure our children don't become brain sucking zombies. */
     if(create_child_handler_signal() == -1) {
-        perror("Error creating signal to handle zombie children.");
+        perror("(main) create_child_handler_signal(): Error creating signal to handle zombie children.");
         graceful_exit(EXIT_FAILURE);
     }
 
@@ -119,7 +119,7 @@ int connect_server(const char *server_ip) {
     struct sockaddr_in serv_address;
 
     if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Socket() failed.");
+        perror("(connect_server) socket(): Failed setting the server's socket.");
         return -1;
     }
 
@@ -130,7 +130,7 @@ int connect_server(const char *server_ip) {
 
     /* Connect the client and server. */
     if((connect(server_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
-        perror("Connect() failed.");
+        perror("(connect_server) connect(): Failed connecting to the server.");
         return -1;
     }
 
@@ -150,31 +150,31 @@ int handshake(int server_fd) {
 
     /* Receive the challenge. */
     if((h_msg = read_handshake_messages(server_fd)) == NULL) {
-        perror("Failed reading the challenge from the server.");
+        perror("(handshake) read_handshake_messages(): Failed reading the challenge from the server.");
         return -1;
     }
 
     /* Verify the challenge against our known result. */
     if(strcmp(h_msg, CHALLENGE) != 0) {
-        perror("Incorrect challenge received from the server");
+        perror("(handshake) strcmp(): Incorrect challenge received from the server");
         return -1;
     }
 
     /* Send SECRET to the server for verification. */
     if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
-        perror("Failed sending the secret to the server.");
+        perror("(handshake) write(): Failed sending the secret to the server.");
         return -1;
     }
 
     /* Receive the server's verification message. */
     if((h_msg = read_handshake_messages(server_fd)) == NULL) {
-        perror("Failed to receive the server's PROCEED message.");
+        perror("(handshake) read_handshake_messages(): Failed to receive the server's PROCEED message.");
         return -1;
     }
 
     /* Verify the server's response to our known result. */
     if(strcmp(h_msg, PROCEED) != 0) {
-        perror("The server's PROCEED message is invalid.");
+        perror("(handshake) strcmp(): The server's PROCEED message is invalid.");
         return -1;
     }
 
@@ -195,9 +195,9 @@ char *read_handshake_messages(int client_fd)
   
     if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
         if (errno)
-            perror("Error reading from the client socket.");
+            perror("(read_handshake_messages) read(): Error reading from the client socket.");
         else
-            perror("Client closed connection unexpectedly.");
+            perror("(read_handshake_messages) read(): Client closed connection unexpectedly.");
             
         return NULL; 
     }
@@ -222,7 +222,7 @@ int set_tty_noncanon_noecho()
 
     // Get the current terminal settings.
     if (tcgetattr(STDIN_FILENO, &tty_settings) == -1) {
-        perror("Getting TTY attributes failed");
+        perror("(set_tty_noncanon_noecho) tcgetattr(): Getting TTY attributes failed");
         return -1;
     }
 
@@ -238,7 +238,7 @@ int set_tty_noncanon_noecho()
 
     /* Put terminal in raw mode after flushing. */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
-        perror("Setting TTY attributes failed");
+        perror("(set_tty_noncanon_noecho) tcsetattr(): Setting TTY attributes failed");
         return -1;
     }
 
@@ -258,7 +258,7 @@ int create_child_handler_signal() {
     sigemptyset(&act.sa_mask);
 
     if(sigaction(SIGCHLD, &act, NULL) == -1) {
-        perror("Creation of the signal handler failed!");
+        perror("(create_child_handler_signal) sigaction(): Creation of the signal handler failed!");
         return -1;
     }
 
@@ -295,7 +295,7 @@ void communicate_with_server(int server_fd) {
 
         DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
         if(transfer_data(STDIN_FILENO, server_fd) == -1) {
-            perror("Error reading from stdin. ");
+            perror("(communicate_with_server) transfer_data(): Error reading from stdin. ");
             graceful_exit(EXIT_FAILURE);
         }
         DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
@@ -306,7 +306,7 @@ void communicate_with_server(int server_fd) {
     /* PARENT PROCESS */
     DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
     if(transfer_data(server_fd, STDOUT_FILENO) == -1) {
-        perror("Error reading from the server and writing to STDOUT.");
+        perror("(communicate_with_server) transfer_data(): Error reading from the server and writing to STDOUT.");
     }
     DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
 
@@ -389,7 +389,7 @@ void restore_tty_settings()
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
         DTRACE("%ld:Failed restoring TTY settings.\n",(long)getpid());
-        perror("Restoring TTY attributes failed");
+        perror("(restore_tty_settings) tcsetattr(): Restoring TTY attributes failed");
         exit(EXIT_FAILURE);
     }
 
