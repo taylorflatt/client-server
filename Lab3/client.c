@@ -1,3 +1,22 @@
+/** Lab3: Client 10/16/2017 for CS 591.
+ * 
+ * Author: Taylor Flatt
+ * 
+ * Properties:
+ *   -- uses plain read() with initial protocol exchange
+ *   -- uses two subprocesses for commands-shell exchange:
+ *           (parent) read from socket and write to stdout
+ *           (child)  read from stdin and write to socket
+ *   -- uses read()/write() for all I/O
+ *   -- assumes all write()'s are done in full (no partials), which is true since blocking mode
+ *   -- setups up SIGCHLD handler to deal with premature child process termination
+ *   -- parent always collects child before termination
+ *   -- TTY changed to noncanonical mode
+ *  -- TTY reset to canonical mode before termination
+ * 
+ * usage: client SERVER_IP_ADDRESS
+*/
+
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <stdio.h>
@@ -13,14 +32,14 @@
 #include <signal.h>
 #include "DTRACE.h"
 
-// Preprocessor Constants
+/* Preprocessor Constants */
 #define MAX_LENGTH 4096
 #define PORT 4070
 #define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 
-//Prototypes
+/* Prototypes. */
 int connect_server(const char *server_ip);
 int handshake(int server_fd);
 char *read_handshake_messages(int server_fd);
@@ -32,14 +51,14 @@ int transfer_data(int from, int to);
 void graceful_exit(int exit_status);
 void restore_tty_settings();
 
+/* Global Variables. */
 struct termios saved_tty_settings;
 
 int main(int argc, char *argv[]){
     int server_fd;
     char ip[MAX_LENGTH];
     
-
-    // Check command-line arguments and store ip.
+    /* Make sure the command-line arguments are in order. */
     if(argc != 2) {
         fprintf(stderr, "\nIncorrect number of command line arguments!\n\n");
         printf("    Usage: %s SERVER_IP\n\n", argv[0]);
@@ -50,29 +69,27 @@ int main(int argc, char *argv[]){
 
     DTRACE("Client starting: PID=%ld, PGID=%ld, SID=%ld\n",(long)getpid(),(long)getpgrp(),(long)getsid(0));
 
-    // Connect to the server.
     if((server_fd = connect_server(ip)) == -1) {
         perror("Failed to connect to server.");
         exit(EXIT_FAILURE);
     }
 
-    // Set SIGPIPE to ignored so that a write to a closed connection causes an error return
-    // rather than a SIGPIPE termination.
+    /* Set SIGPIPE to ignored so that a write to a closed 
+     * connection causes an error return rather than a SIGPIPE termination. 
+     */
     signal(SIGPIPE, SIG_IGN);
     
-    // Perform the handshake.
     if(handshake(server_fd) == -1) {
         perror("Failed handshake with the server.");
         exit(EXIT_FAILURE);
     }
 
-    // Set the client's TTY to non-canonical mode.
     if(set_tty_noncanon_noecho() == -1) {
         perror("Failed setting client's terminal settings.");
         exit(EXIT_FAILURE);
     }
 
-    // Make sure our children don't become brain sucking zombies.
+    /* Make sure our children don't become brain sucking zombies. */
     if(create_child_handler_signal() == -1) {
         perror("Error creating signal to handle zombie children.");
         graceful_exit(EXIT_FAILURE);
@@ -82,30 +99,36 @@ int main(int argc, char *argv[]){
 
     // Normal termination.
     DTRACE("%ld:Client termination...\n",(long)getpid());
-        if (errno)
-            graceful_exit(EXIT_FAILURE);
+    if (errno)
+        graceful_exit(EXIT_FAILURE);
 
     graceful_exit(EXIT_SUCCESS);
 
     return 0;
 }
 
+/** Connects the client to a server with a particular IP/Port.
+ * 
+ * server_ip: A string corresponding to the server's IP.
+ * 
+ * Returns: An integer corresponding to the server's file descriptor if successful. Otherwise, 
+ *          it returns a -1.
+*/
 int connect_server(const char *server_ip) {
     int server_fd;
     struct sockaddr_in serv_address;
 
-    // Create client socket.
     if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket() failed.");
         return -1;
     }
 
-    // Name the socket, as agreed with the server.
+    /* Name the socket and set the port. */
     serv_address.sin_family = AF_INET;
     serv_address.sin_port = htons(PORT);
     inet_aton(server_ip, &serv_address.sin_addr);
 
-    // Connect the client and server sockets.
+    /* Connect the client and server. */
     if((connect(server_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
         perror("Connect() failed.");
         return -1;
@@ -114,34 +137,42 @@ int connect_server(const char *server_ip) {
     return server_fd;
 }
 
+/** Conducts a three-way handshake with the server to verify that the client is 
+ * authorized to connect.
+ * 
+ * server_fd: An integer corresponding to the server's file descriptor.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int handshake(int server_fd) {
     
-    // Receive the challenge.
     char *h_msg;
+
+    /* Receive the challenge. */
     if((h_msg = read_handshake_messages(server_fd)) == NULL) {
         perror("Failed reading the challenge from the server.");
         return -1;
     }
 
-    //  Verify the challenge against known result.
+    /* Verify the challenge against our known result. */
     if(strcmp(h_msg, CHALLENGE) != 0) {
         perror("Incorrect challenge received from the server");
         return -1;
     }
 
-    // Send secret to the server for verification.
+    /* Send SECRET to the server for verification. */
     if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
         perror("Failed sending the secret to the server.");
         return -1;
     }
 
-    // Receive server verification.
+    /* Receive the server's verification message. */
     if((h_msg = read_handshake_messages(server_fd)) == NULL) {
         perror("Failed to receive the server's PROCEED message.");
         return -1;
     }
 
-    // Receive the final verification from the server to proceed.
+    /* Verify the server's response to our known result. */
     if(strcmp(h_msg, PROCEED) != 0) {
         perror("The server's PROCEED message is invalid.");
         return -1;
@@ -150,8 +181,13 @@ int handshake(int server_fd) {
     return 0;
 }
 
-// Reads a messagr from a server and returns it as a string (null terminated).
-// Also handles read errors internally returning NULL if an error is encountered.
+/** Reads the handshake messages.
+ * 
+ * client_fd: An integer corresponding to the clients's file descriptor.
+ * 
+ * Returns: A null terminated string if successful, otherwise NULL if an error is
+ *          encountered.
+*/
 char *read_handshake_messages(int client_fd)
 {
   static char msg[MAX_LENGTH];
@@ -159,9 +195,9 @@ char *read_handshake_messages(int client_fd)
   
     if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
         if (errno)
-            perror("Error reading from the client socket");
+            perror("Error reading from the client socket.");
         else
-            fprintf(stderr, "Client closed connection unexpectedly\n");
+            perror("Client closed connection unexpectedly.");
             
         return NULL; 
     }
@@ -171,6 +207,14 @@ char *read_handshake_messages(int client_fd)
   return msg;
 }
 
+/** Sets the bash terminal to non-canonical and non-echo mode.
+ * 
+ * Remarks: This is important so that signals aren't displayed to the 
+ *          client when they hit backspace and for programs such as 
+ *          top/vi to work.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int set_tty_noncanon_noecho()
 {
     DTRACE("%ld:Setting terminal to non-canon mode.\n",(long)getpid());
@@ -182,17 +226,17 @@ int set_tty_noncanon_noecho()
         return -1;
     }
 
-    //Save current settings so can restore:
+    /* Save terminal settings so they can be restored later. */
     saved_tty_settings = tty_settings;
 
-    // ECHO won't display the client's text as they type it with putty but ECHONL does.
-    tty_settings.c_lflag &= ~(ICANON | ECHO);
-    tty_settings.c_lflag |= ISIG;
-    tty_settings.c_lflag &= ~ICRNL;
-    tty_settings.c_cc[VMIN] = 1;
-    tty_settings.c_cc[VTIME] = 0;
+    /* Set terminal settings appropriately. */
+    tty_settings.c_lflag &= ~(ICANON | ECHO);   /* Sets terminal to non-canonical mode. */
+    tty_settings.c_lflag |= ISIG;               /* Does not echo back input (exit exit). */
+    tty_settings.c_lflag &= ~ICRNL;             /* Allows signals to be generated when detected. */
+    tty_settings.c_cc[VMIN] = 1;                /* Minimum number of characters for noncanonical reads. */
+    tty_settings.c_cc[VTIME] = 0;               /* Timeout in deciseconds for noncanonical reads. */
 
-    // Put terminal in raw mode after flushing.
+    /* Put terminal in raw mode after flushing. */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
         perror("Setting TTY attributes failed");
         return -1;
@@ -201,6 +245,10 @@ int set_tty_noncanon_noecho()
     return 0;
 }
 
+/** Creates a signal handler to detect when a subprocess exits.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int create_child_handler_signal() {
     
     DTRACE("%ld:Creating child termination signal handler.\n",(long)getpid());
@@ -217,24 +265,34 @@ int create_child_handler_signal() {
     return 0;
 }
 
-// Kills off any children and exits.
+/** Associated with create_child_handler_signal and will gracefully shut the
+ * client down.
+ * 
+ * Returns: None.
+*/
 void sigchld_handler(int sig) {
     
     DTRACE("%ld:Caught signal from subprocess termination...terminating!\n",(long)getpid());
     graceful_exit(EXIT_SUCCESS);
 }
 
+/** Handles the communication to and from the server by creating a subprocess which handles 
+ * communication from stdin to the server. The parent process handles communication coming 
+ * from the server to the client and displays it appropriately.
+ * 
+ * Child: Sends communication from stdin -> socket.
+ * Parent: Sends communication from socket -> stdout.
+ * 
+ * Returns: None.
+*/
 void communicate_with_server(int server_fd) {
 
     pid_t cpid;
 
-    /// CHILD PROCESS
-    ///
-    /// Reads from STDIN and sends data to the server.
+    /* CHILD PROCESS */
     if((cpid = fork()) == 0) {
-        // Since cpid isn't required inside the child, reuse the variable to 
-        // store the parent so we can kill it.
-        cpid = getppid();
+        cpid = getppid();   /* Reuse since the child's pid isn't required here. */
+
         DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
         if(transfer_data(STDIN_FILENO, server_fd) == -1) {
             perror("Error reading from stdin. ");
@@ -245,9 +303,7 @@ void communicate_with_server(int server_fd) {
         graceful_exit(EXIT_SUCCESS);
     }
 
-    /// PARENT PROCESS
-    ///
-    /// Read from the server and write to the client STDOUT.
+    /* PARENT PROCESS */
     DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
     if(transfer_data(server_fd, STDOUT_FILENO) == -1) {
         perror("Error reading from the server and writing to STDOUT.");
@@ -261,6 +317,13 @@ void communicate_with_server(int server_fd) {
     return;
 }
 
+/** Actually reads and writes data to and from sockets.
+ * 
+ * from: Integer representing the source file descriptor (read).
+ * to: Integer representing the targer file descriptor (write).
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int transfer_data(int from, int to) {
     char buf[MAX_LENGTH];
     ssize_t nread;
@@ -280,34 +343,50 @@ int transfer_data(int from, int to) {
     return 0;
 }
 
-// To be called to terminate cleanly.
-// Restores TTY settings, collects child,
-// and determines success/failure exist status.
+/** Called in order to terminate in a sane way. Function restores the 
+ * tty settings, collects any children processes, and determines the 
+ * appropriate exit status to return based on the children.
+ * 
+ * Remarks: Note that even if the request exit status is EXIT_SUCCESS, 
+ * an EXIT_FAILURE may still be used if the children have problems dying.
+ * 
+ * exit_status: An integer corresponding to the requested exit status.
+ * 
+ * Returns: None.
+*/
 void graceful_exit(int exit_status)
 {
     int childstatus;
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
-    //Collect child and get its exit status:
+    /* Collect any children and get their exit statuses. */
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
     wait(&childstatus);
 
-    //Determine if exit status should be failure:
-    if (exit_status==EXIT_FAILURE || !WIFEXITED(childstatus) || WEXITSTATUS(childstatus)!=EXIT_SUCCESS) {
+    if(!WIFEXITED(childstatus) || WEXITSTATUS(childstatus) != EXIT_SUCCESS) {
         DTRACE("%ld:Error cleaning up children.\n",(long)getpid());
         exit(EXIT_FAILURE);
     }
 
-        DTRACE("%ld:Successfully cleaned up children. Exiting...\n",(long)getpid());
+    if (exit_status == EXIT_FAILURE)
+        exit(EXIT_FAILURE);
+
+    DTRACE("%ld:Successfully cleaned up children. Exiting...\n",(long)getpid());
 
     exit(EXIT_SUCCESS);
 }
 
-// Restores initial TTY settings:
+/** Restores the initial saved tty settings prior to making changes.
+ * 
+ * Remarks: This requires that the settings were saved in a global variable.
+ * 
+ * Returns: None.
+*/
 void restore_tty_settings()
 {
     DTRACE("%ld:Restoring TTY settings.\n",(long)getpid());
+
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
         DTRACE("%ld:Failed restoring TTY settings.\n",(long)getpid());
         perror("Restoring TTY attributes failed");
