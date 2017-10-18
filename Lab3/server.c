@@ -162,7 +162,6 @@ int create_server() {
     return server_sockfd;
 }
 
-// Epoll loop which listens for any data transfer between the client/server.
 /** An epoll listener which handles communication between the client and server by 
  * waiting for read/write events to come through on available file descriptors.
  * 
@@ -207,7 +206,6 @@ void *epoll_listener(void * ignore) {
     }
 }
 
-// Handles the three-way handshake and starts up the create_processes method.
 /** Handles a client attempting to connect by conducting the handshake, setting the 
  * nonblocking parameter, and opening the pty.
  * 
