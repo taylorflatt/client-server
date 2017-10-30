@@ -9,9 +9,9 @@
 
 /* Custom Types. */
 typedef struct semaphore {
-    pthread_mutex_t mutex;
-    pthread_cond_t condition;
-    int flag;
+    pthread_mutex_t mutex;      /* Lock */
+    pthread_cond_t condition;   /* Condition variable */
+    int flag;                   /* Number of keys */
 } semaphore;
 
 typedef struct thread {
@@ -40,10 +40,6 @@ static tpool_t tpool;
 static task_queue queue;
 
 /* Prototypes. */
-
-//int tpool_add_task(int task)
-//static int queue_init(int len);
-
 static void* thread_loop(void* thread);
 static int thread_init(thread** threadpp, int ord);
 
@@ -140,15 +136,20 @@ static int thread_init(thread** threadptr, int ord) {
 static void* thread_loop(void *thr) {
 
     int task;
+    thread *_thread;
+    _thread = (thread *) thr;
 
     /* If the queue is empty, wait. Then run any new jobs. */
     for(;;) {
         pool_wait(tpool.queue -> has_jobs);
         pthread_mutex_lock(&tpool.queue -> mutex);
         task = pop(tpool.queue);
+        DTRACE("Thread %c: Received %d\n", _thread -> id, task);
         pthread_mutex_unlock(&tpool.queue -> mutex);
 
         tpool.subroutine(task);
+
+        DTRACE("Thread %c: Completed %d\n", _thread -> id, task);
     }
 
     return NULL;
@@ -193,6 +194,8 @@ static int push(task_queue *q, int task) {
     /* Move the tail down. */
     q -> tail = (q -> tail + 1) % q -> len;
 
+    DTRACE("Queue: Received %d\n", task);
+
     /* Signal that there is a new task */
     pthread_mutex_lock(&q->has_jobs -> mutex);
     queue.has_jobs -> flag += 1;
@@ -203,6 +206,9 @@ static int push(task_queue *q, int task) {
 }
 
 static int resize_queue(task_queue *q) {
+
+    DTRACE("Resizing queue.");
+
     static int i;
     size_t newLen = q -> len * 2;
     q -> buffer = (int *) realloc(q -> buffer, newLen * sizeof(int));
