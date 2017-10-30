@@ -33,5 +33,5 @@ void test_function(int task) {
 
     printf("Task %d: Getting %d\n", task, value);
     value++;
-    sleep(13000ULL * (int)sysconf(_SC_NPROCESSORS_ONLN) / 4 * rand() / RAND_MAX);
+    sleep(3 * (int)sysconf(_SC_NPROCESSORS_ONLN) / 4 * rand() / RAND_MAX);
 }
