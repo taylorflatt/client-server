@@ -19,35 +19,36 @@ typedef struct thread {
     pthread_t pthread_id;     /* Pointer to actual thread. */
 } thread;
 
-typedef struct task_queue {
+typedef struct job_queue {
     pthread_mutex_t mutex;    /* R/W mutex */
     semaphore* has_jobs;      /* Contains any tasks. */
     size_t len;               /* Number of jobs in queue. */
     int head;                 /* Front of the queue. */
     int tail;                 /* End of the queue. */
     int* buffer;              /* Buffer. */
-} task_queue;
+} job_queue;
 
 typedef struct tpool {
     thread** threads;         /* Pointer to the threads. */
     int num_threads;          /* Number of threads in the pool. */
     void (*subroutine)(int);  /* Function assigned. */
-    task_queue* queue;        /* Thread pool queue. */
+    job_queue* queue;         /* Thread pool queue. */
 } tpool_t;
 
 /* Global Variables. */
 static tpool_t tpool;
-static task_queue queue;
+static job_queue queue;
 
 /* Prototypes. */
-static void* thread_loop(void* thread);
-static int thread_init(thread** threadpp, int ord);
-
 static int queue_init();
-static int push(task_queue* q, int task);
-static int pop(task_queue* q);
-static int resize_queue(task_queue* q);
+static int thread_init(thread** threadpp, int ord);
+static void* thread_loop(void* thread);
 static void pool_wait(semaphore* sem);
+static int pop(job_queue* q);
+static int push(job_queue* q, int task);
+static int resize_queue(job_queue* q);
+
+
 
 /** Handles creating the threadpool and assigning a single thread to each code.
  * 
@@ -73,17 +74,15 @@ int tpool_init(void (*task)(int)) {
         return -1;
     }
 
-    int i = 0;
-    do {
-      if (thread_init(&(tpool.threads[i]), i)) {
-          fprintf(stderr, "(tpool_init) thread_init(): Error creating thread -- aborting\n");
-          return -1;
-      }
-
-      DTRACE("Created thread %c\n", tpool.threads[i]->id);
-
-    } while (++i < tpool.num_threads);
-
+    /* Create the threads for the thread pool. */
+    for(int i = 0; i < tpool.num_threads; i++) {
+        if (thread_init(&(tpool.threads[i]), i)) {
+            fprintf(stderr, "(tpool_init) thread_init(): Error creating thread -- aborting\n");
+            return -1;
+        }
+  
+        DTRACE("Created thread %c\n", tpool.threads[i] -> id);
+    }
 
     return 0;
 }
@@ -120,8 +119,8 @@ static int queue_init(int len) {
 
     /* Initialize the locks and set waiting. */
     pthread_mutex_init(&queue.mutex, NULL);
-    pthread_mutex_init(&(queue.has_jobs->mutex), NULL);
-    pthread_cond_init(&(queue.has_jobs->condition), NULL);
+    pthread_mutex_init(&(queue.has_jobs -> mutex), NULL);
+    pthread_cond_init(&(queue.has_jobs -> condition), NULL);
     queue.has_jobs -> flag = 0;
 
     return 0;
@@ -143,11 +142,11 @@ static int thread_init(thread** threadptr, int ord) {
     }
 
     /* Give them simple names A, B, C, ..., Z. */
-    (*threadptr)->id = 'A' + ord;
+    (*threadptr) -> id = 'A' + ord;
 
     /* Create the threads and detach them from the process. */
-    pthread_create(&((*threadptr)->pthread_id), NULL, thread_loop, (*threadptr));
-    pthread_detach((*threadptr)->pthread_id);
+    pthread_create(&((*threadptr) -> pthread_id), NULL, thread_loop, (*threadptr));
+    pthread_detach((*threadptr) -> pthread_id);
 
     return 0;
   }
@@ -165,7 +164,7 @@ static void* thread_loop(void *thr) {
     _thread = (thread *) thr;
 
     /* If the queue is empty, wait. Then run any new jobs. */
-    for(;;) {
+    while(1) {
         pool_wait(tpool.queue -> has_jobs);
         pthread_mutex_lock(&tpool.queue -> mutex);
         task = pop(tpool.queue);
@@ -204,7 +203,7 @@ static void pool_wait(semaphore* sem) {
  * 
  * Returns: An integer representing the task to be completed.
 */
-static int pop(task_queue *q) {
+static int pop(job_queue *q) {
     
     int task = q -> buffer[q -> head];
     q -> head = (q -> head + 1) % q -> len;
@@ -236,10 +235,10 @@ int tpool_add_task(int task) {
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
 */
-static int push(task_queue *q, int task) {
+static int push(job_queue *q, int task) {
 
     /* Check if the queue is full. */
-    if(((q->tail + 1) % (int)q->len) == q->head) {
+    if(((q -> tail + 1) % (int)q -> len) == q -> head) {
         if(resize_queue(q)) {
             perror("(push) resize_queue(): Failed to increase the size of the queue.");
             return -1;
@@ -255,10 +254,10 @@ static int push(task_queue *q, int task) {
     DTRACE("Queue: Received %d\n", task);
 
     /* Signal that there is a new task */
-    pthread_mutex_lock(&q->has_jobs -> mutex);
+    pthread_mutex_lock(&q -> has_jobs -> mutex);
     queue.has_jobs -> flag += 1;
-    pthread_cond_signal(&q->has_jobs -> condition);
-    pthread_mutex_unlock(&q->has_jobs -> mutex);
+    pthread_cond_signal(&q -> has_jobs -> condition);
+    pthread_mutex_unlock(&q -> has_jobs -> mutex);
 
     return 0;
 }
@@ -269,7 +268,7 @@ static int push(task_queue *q, int task) {
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
 */
-static int resize_queue(task_queue *q) {
+static int resize_queue(job_queue *q) {
 
     DTRACE("Resizing queue.");
 
