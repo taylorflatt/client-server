@@ -49,6 +49,12 @@ static int pop(task_queue* q);
 static int resize_queue(task_queue* q);
 static void pool_wait(semaphore* sem);
 
+/** Handles creating the threadpool and assigning a single thread to each code.
+ * 
+ * task: A pointer corresponding to a void function which the thread pool will execute.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int tpool_init(void (*task)(int)) {
 
     int numProcessors = (int)sysconf(_SC_NPROCESSORS_ONLN);   
@@ -82,7 +88,13 @@ int tpool_init(void (*task)(int)) {
     return 0;
 }
 
-  static int queue_init(int len) {
+/** Handles creating the unbounded queue and initializing the locks.
+ * 
+ * len: The initial length of the queue.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
+static int queue_init(int len) {
 
     size_t init_len = len;
     tpool.queue = &queue;
@@ -115,6 +127,13 @@ int tpool_init(void (*task)(int)) {
     return 0;
 }
 
+/** Handles creating a thread and assigning it a friendly name.
+ * 
+ * threadptr: A double pointer to a thread.
+ * ord: The order of the thread. Increments off character A.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 static int thread_init(thread** threadptr, int ord) {
 
     *threadptr = (thread*) malloc(sizeof(thread));
@@ -133,6 +152,12 @@ static int thread_init(thread** threadptr, int ord) {
     return 0;
   }
 
+/** A task consumer which removes tasks off the queue (if any) and performs the task.
+ * 
+ * thr: A thread which will perform a task.
+ * 
+ * Returns: None.
+*/
 static void* thread_loop(void *thr) {
 
     int task;
@@ -155,6 +180,12 @@ static void* thread_loop(void *thr) {
     return NULL;
 }
 
+/** Handles the waiting when there isn't anything going on.
+ * 
+ * sem: A semaphore associated with the queue.
+ * 
+ * Returns: None.
+*/
 static void pool_wait(semaphore* sem) {
 
     pthread_mutex_lock(&sem -> mutex);
@@ -167,6 +198,26 @@ static void pool_wait(semaphore* sem) {
     pthread_mutex_unlock(&sem -> mutex);
 }
 
+/** Removes a task from the queue.
+ * 
+ * q: The queue to which a task will be removed.
+ * 
+ * Returns: An integer representing the task to be completed.
+*/
+static int pop(task_queue *q) {
+    
+    int task = q -> buffer[q -> head];
+    q -> head = (q -> head + 1) % q -> len;
+
+    return task;
+}
+
+/** Public interface for adding a task to a pool.
+ * 
+ * task: The particular task which is to be added.
+ * 
+ * Returns: An integer representing the task to be completed.
+*/
 int tpool_add_task(int task) {
     int rval;
 
@@ -178,6 +229,13 @@ int tpool_add_task(int task) {
     return rval;
 }
 
+/** Adds a task to the queue. Resizes the queue if necessary. Signals that there is a new job.
+ * 
+ * q: The queue to which the task will be added.
+ * task: The particular task which is to be added.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 static int push(task_queue *q, int task) {
 
     /* Check if the queue is full. */
@@ -205,6 +263,12 @@ static int push(task_queue *q, int task) {
     return 0;
 }
 
+/** Resizes the queue by doubling its size.
+ * 
+ * q: The queue which should be resized.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 static int resize_queue(task_queue *q) {
 
     DTRACE("Resizing queue.");
@@ -229,13 +293,5 @@ static int resize_queue(task_queue *q) {
     q -> len = newLen;
 
     return 0;
-}
-
-static int pop(task_queue *q) {
-
-    int task = q -> buffer[q -> head];
-    q -> head = (q -> head + 1) % q -> len;
-
-    return task;
 }
 
