@@ -44,8 +44,8 @@ static int queue_init();
 static int thread_init(thread** threadpp, int ord);
 static void* thread_loop(void* thread);
 static void pool_wait(semaphore* sem);
-static int pop(job_queue* q);
-static int push(job_queue* q, int task);
+static int dequeue(job_queue* q);
+static int enqueue(job_queue* q, int task);
 static int resize_queue(job_queue* q);
 
 
@@ -160,6 +160,8 @@ static int thread_init(thread** threadptr, int ord) {
 static void* thread_loop(void *thr) {
 
     int task;
+
+    /* DEBUG: Required to print the thread info. */
     thread *_thread;
     _thread = (thread *) thr;
 
@@ -167,7 +169,7 @@ static void* thread_loop(void *thr) {
     while(1) {
         pool_wait(tpool.queue -> has_jobs);
         pthread_mutex_lock(&tpool.queue -> mutex);
-        task = pop(tpool.queue);
+        task = dequeue(tpool.queue);
         DTRACE("Thread %c: Received %d\n", _thread -> id, task);
         pthread_mutex_unlock(&tpool.queue -> mutex);
 
@@ -203,7 +205,7 @@ static void pool_wait(semaphore* sem) {
  * 
  * Returns: An integer representing the task to be completed.
 */
-static int pop(job_queue *q) {
+static int dequeue(job_queue *q) {
     
     int task = q -> buffer[q -> head];
     q -> head = (q -> head + 1) % q -> len;
@@ -222,7 +224,7 @@ int tpool_add_task(int task) {
 
     /* Add a task to the pool. */
     pthread_mutex_lock(&tpool.queue -> mutex);
-    rval = push(tpool.queue, task);
+    rval = enqueue(tpool.queue, task);
     pthread_mutex_unlock(&tpool.queue -> mutex);
 
     return rval;
@@ -235,12 +237,12 @@ int tpool_add_task(int task) {
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
 */
-static int push(job_queue *q, int task) {
+static int enqueue(job_queue *q, int task) {
 
     /* Check if the queue is full. */
     if(((q -> tail + 1) % (int)q -> len) == q -> head) {
         if(resize_queue(q)) {
-            perror("(push) resize_queue(): Failed to increase the size of the queue.");
+            perror("(enqueue) resize_queue(): Failed to increase the size of the queue.");
             return -1;
         }
     }
@@ -285,10 +287,12 @@ static int resize_queue(job_queue *q) {
     if(q -> head > q -> tail) {
         /* Move the head portion in front of the queue */
         for(i = q-> head; i < (int) q -> len; i++) {
-            q -> buffer[q -> len + 1] = q -> buffer[i];
+            q -> buffer[q -> len + 1] = q -> buffer[i];     /* Don't forget len is the old len. */
         }
         q -> head += q -> len;
     }
+
+    /* Set the new length to the queue parameter */
     q -> len = newLen;
 
     return 0;
