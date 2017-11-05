@@ -88,11 +88,11 @@ int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 int epoll_fd;
 
 int main(int argc, char *argv[]) {
-    int client_fd, server_sockfd;
+    int client_fd;
     int *client_fd_ptr;
     pthread_t thread_id;
 
-    if((server_sockfd = create_server()) == -1) {
+    if((create_server()) == -1) {
         perror("(Main) create_server(): Error creating the server.");
         exit(EXIT_FAILURE);
     }
@@ -113,6 +113,8 @@ int main(int argc, char *argv[]) {
         perror("(Main) epoll_create1(): Error creating EPOLL.");
         exit(EXIT_FAILURE);
     }
+
+    epoll_listener();
 
     if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
         perror("(Main) pthread_create(): Failed creating the pthread. Lack of resources or system limit encountered.");
@@ -173,7 +175,13 @@ int create_server() {
         return -1;
     }
 
-    return server_sockfd;
+    /* Setup epoll for connection listener. */
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = server_sockfd;
+    epoll_ctl(efd, EPOLL_CTL_ADD, server_sockfd, &ev);
+
+    return 0;
 }
 
 /** An epoll listener which handles communication between the client and server by 
@@ -206,14 +214,11 @@ void *epoll_listener(void * ignore) {
         for(i = 0; i < events; i++) {
             /* Check if there is an event and the associated fd is available for reading. */
             if(ev_list[i].events & EPOLLIN) {
-                DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n", (long)getpid(),ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
-                if(transfer_data(ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd])) {
-                    perror("(epoll_listener) transfer_data(): Error reading/writing to the client. Shutting down client's connections.\n");
-                    graceful_exit(ev_list[i].data.fd);
-                }
-                DTRACE("%ld:Completed data transfer PTY-->socket\n", (long)getpid());
+                DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
+                tpool_add_task(evlist[i].data.fd);
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", (long)getpid(), ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+                // TODO: Need to set client state to terminated.
                 graceful_exit(ev_list[i].data.fd);
             }
         }
