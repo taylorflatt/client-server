@@ -120,30 +120,7 @@ int main(int argc, char *argv[]) {
 
     epoll_listener();
 
-    if(pthread_create(&thread_id, NULL, &epoll_listener, NULL) != 0) {
-        perror("(Main) pthread_create(): Failed creating the pthread. Lack of resources or system limit encountered.");
-    }
-
-    DTRACE("%ld:New EPOLL thread: TID=%ld, PID=%ld\n", (long)getppid(), (long)&thread_id, (long)getpid());
-
-    /* CLIENT ACCEPT LOOP */
-    while(1) {
-
-        if((client_fd = accept(server_sockfd, (struct sockaddr *) NULL, NULL)) == -1) {
-            perror("(Main) accept(): Error making a connection with the client.");
-        }
-
-        /* Create a pointer for the fd. Required for a pthread creation. */
-        client_fd_ptr = (int *) malloc(sizeof(int));
-        *client_fd_ptr = client_fd;
-        if(pthread_create(&thread_id, NULL, &handle_client, client_fd_ptr)) {
-            perror("(Main) pthread_create(): Error creating the temporary ACCEPT pthread.");
-        }
-
-        DTRACE("%ld:New ACCEPT thread: TID=%ld, PID=%ld\n", (long)getppid(), (long)&thread_id, (long)getpid());
-    }
-
-    exit(EXIT_SUCCESS);
+    exit(EXIT_FAILURE);
 }
 
 void handle_io(int fd) {
