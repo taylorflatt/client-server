@@ -35,13 +35,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 #include "DTRACE.h"
 #include "tpool.h"
@@ -52,13 +50,13 @@ typedef enum cstate {
     established,
     unwritten,
     terminated
-} cstate_t
+} cstate_t;
 
 typedef struct client {
     int socket_fd;
     int pty_fd;
     cstate_t state;
-} client_t
+} client_t;
 
 /* Preprocessor constants. */
 #define PORT 4070
@@ -80,10 +78,10 @@ int initiate_handshake(int client_fd);
 int validate_client(int client_fd);
 int open_pty(int client_fd);
 int create_bash_process(char *pty_slave);
-void *epoll_listener(void * ignore);
+void epoll_listener();
 int set_nonblocking_fd(int fd);
 char *read_client_message(int client_fd);
-int transfer_data(int from, int to);
+void transfer_data(int from);
 void graceful_exit(int exit_status);
 
 /* Global Variables */
@@ -92,11 +90,16 @@ client_t *client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 int epoll_fd;
 
 /* Allows epoll to perform the client handshake if an event comes in on the listening socket. */
-int listen_fd
+int listen_fd;
 
 int main(int argc, char *argv[]) {
 
     tpool_init(handle_io);
+
+    if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
+        perror("(Main) epoll_create1(): Error creating EPOLL.");
+        exit(EXIT_FAILURE);
+    }
 
     if((create_server()) == -1) {
         perror("(Main) create_server(): Error creating the server.");
@@ -115,11 +118,6 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
-        perror("(Main) epoll_create1(): Error creating EPOLL.");
-        exit(EXIT_FAILURE);
-    }
-
     epoll_listener();
 
     exit(EXIT_FAILURE);
@@ -130,15 +128,14 @@ int main(int argc, char *argv[]) {
  * Returns: An integer corresponding to server's file descriptor on success or failure -1.
 */
 int create_server() {
-    int server_sockfd;
     struct sockaddr_in server_address;
 
-    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if((listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("(create_server) socket(): Error creating socket.");
     }
 
     int i = 1;
-    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
+    if(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
         perror("(create_server) setsockopt(): Error setting sockopt.");
         return -1;
     }
@@ -148,21 +145,22 @@ int create_server() {
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(PORT);
 
-    if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
+    if((bind(listen_fd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
         perror("(create_server) bind(): Error assigning address to socket.");
         return -1;
     }
 
-    if((listen(server_sockfd, 10)) == -1){
+    if((listen(listen_fd, 10)) == -1){
         perror("(create_server) listen(): Error listening to socket.");
         return -1;
     }
 
     /* Setup epoll for connection listener. */
+    set_nonblocking_fd(listen_fd);
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = server_sockfd;
-    epoll_ctl(efd, EPOLL_CTL_ADD, server_sockfd, &ev);
+    ev.data.fd = listen_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev);
 
     return 0;
 }
@@ -185,7 +183,7 @@ void client_connect() {
 
     int client_fd;
 
-    if((client_fd = accept(server_sockfd, (struct sockaddr *) NULL, NULL)) == -1) {
+    if((client_fd = accept(listen_fd, (struct sockaddr *) NULL, NULL)) == -1) {
         perror("(client_connect) accept(): Error making a connection with the client.");
     }
 
@@ -204,7 +202,7 @@ void client_connect() {
 
 cstate_t get_cstate(int fd) {
 
-    return client_fd_tuple[fd] -> state;
+    return client_fd_tuples[fd] -> state;
 }
 
 
@@ -221,7 +219,7 @@ int register_client(int sock) {
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = sock;
 
-    if(epoll_ctl(efd, EPOLL_CTL_ADD, sock, &ev) == -1) {
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock, &ev) == -1) {
         perror("(register_client) epoll_ctl(): Failed to add socket to epoll.");
         return -1;
     }
@@ -242,6 +240,8 @@ int initiate_handshake(int client_fd) {
 }
 
 int validate_client(int client_fd) {
+
+    char *pass;
 
     if((pass = read_client_message(client_fd)) == NULL) {
         perror("(validate_client) read_client_message(): Reading the client's password failed.");
@@ -268,8 +268,8 @@ int open_pty(int client_fd) {
     
     char * pty_slave;
     int pty_master, err;
-    struct epoll_event ep_ev[2];
-    client_t *client = client_fd_tuple[client_fd];
+    struct epoll_event ev;
+    client_t *client = client_fd_tuples[client_fd];
 
     DTRACE("%ld:Opening PTY with CLIENT=%d.\n", (long)getppid(), client_fd);  
 
@@ -313,11 +313,11 @@ int open_pty(int client_fd) {
     }
 
     client -> pty_fd = pty_master;
-    client_fd_tuple[pty_master] = client;
+    client_fd_tuples[pty_master] = client;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = pty_master;
 
-    if(epoll_ctl(efd, EPOLL_CTL_ADD, pty, &ev) == -1) {
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, &ev) == -1) {
         perror("(open_pty) epoll_ctl(): Failed to add PTY to epoll.");
         return -1;
     }
@@ -396,7 +396,7 @@ int create_bash_process(char *pty_slave) {
  * 
  * Returns: None.
 */
-void *epoll_listener(void * ignore) {
+void epoll_listener() {
 
     struct epoll_event ev_list[MAX_EVENTS];
     int events;
@@ -420,9 +420,9 @@ void *epoll_listener(void * ignore) {
             /* Check if there is an event and the associated fd is available for reading. */
             if(ev_list[i].events & EPOLLIN) {
                 DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
-                tpool_add_task(evlist[i].data.fd);
+                tpool_add_task(ev_list[i].data.fd);
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
-                DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it and %d down.\n", (long)getpid(), ev_list[i].data.fd, client_fd_tuples[ev_list[i].data.fd]);
+                DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
                 // TODO: Need to set client state to terminated.
                 graceful_exit(ev_list[i].data.fd);
             }
@@ -492,7 +492,7 @@ void transfer_data(int from) {
     
     char buf[MAX_LENGTH];
     ssize_t nread, nwrite;
-    client_t *client = client_fd_tuple[from];
+    client_t *client = client_fd_tuples[from];
     int to;
 
     /* Determine where the data should go. */
@@ -530,7 +530,7 @@ void transfer_data(int from) {
  * Returns: None.
 */
 void graceful_exit(int fd) {
-    client_t *client = client_fd_tuple[fd];
+    client_t *client = client_fd_tuples[fd];
 
     DTRACE("%ld:Started exit procedure.\n", (long)getpid());
     /* If we haven't completed client setup, just close the fd. */
@@ -543,18 +543,18 @@ void graceful_exit(int fd) {
     int pty = client -> pty_fd;
 
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)fd);
-    epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL);
-    if(close(fd) != -1) {
-        client_fd_tuple[fd] = NULL;
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
+    if(close(sock) != -1) {
+        client_fd_tuples[sock] = NULL;
     }
 
     client -> state = terminated;
 
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty);
     if(client -> state == terminated) {
-        epoll_ctl(efd, EPOLL_CTL_DEL, pty, NULL);
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty, NULL);
         if(close(pty) != -1) {
-            client_fd_tuple[pty] = NULL;
+            client_fd_tuples[pty] = NULL;
         }
     }
 
