@@ -48,6 +48,7 @@
 /* Custom types. */
 typedef enum cstate {
     new,
+    registered,
     established,
     unwritten,
     terminated
@@ -91,6 +92,8 @@ int main(int argc, char *argv[]) {
     int client_fd;
     int *client_fd_ptr;
     pthread_t thread_id;
+
+    tpool_init(handle_io);
 
     if((create_server()) == -1) {
         perror("(Main) create_server(): Error creating the server.");
@@ -140,6 +143,228 @@ int main(int argc, char *argv[]) {
     }
 
     exit(EXIT_SUCCESS);
+}
+
+void handle_io(int fd) {
+
+    if(fd == listen_fd) {
+        client_connect();
+    } else if(get_cstate(fd) == new) {
+        if(validate_client(fd) || open_pty(fd)) {
+            perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
+            graceful_exit(fd);
+        }
+    } else {
+        transfer_data(fd);
+    }
+}
+
+void client_connect() {
+
+    int client_fd;
+
+    if((client_fd = accept(server_sockfd, (struct sockaddr *) NULL, NULL)) == -1) {
+        perror("(client_connect) accept(): Error making a connection with the client.");
+    }
+
+    // What if we have too many clients on our server for our client_fd_tuples?
+
+    if(register_client(client_fd)) {
+        perror("(client_connect) register_client(): Failed to register the client with the server.");
+        close(client_fd);
+    }
+
+    if(initiate_handshake(client_fd)) {
+        perror("(client_connect) initiate_handshake(): Failed to initiate the handshake with the client.");
+        close(client_fd);
+    }
+}
+
+cstate_t get_cstate(int fd) {
+
+    return client_fd_tuple[fd] -> state;
+}
+
+
+int register_client(int sock) {
+
+    struct epoll_event ev;
+    client_t *client = (client_t *) malloc(sizeof(client_t));
+    client -> socket_fd = sock;
+    client -> state = registered;
+    client -> pty_fd = -1;      /* No pty created for the client yet. */
+
+    client_fd_tuples[sock] = client;
+
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = sock;
+
+    if(epoll_ctl(efd, EPOLL_CTL_ADD, sock, &ev) == -1) {
+        perror("(register_client) epoll_ctl(): Failed to add socket to epoll.");
+        return -1;
+    }
+
+    return 0;
+}
+
+int initiate_handshake(int client_fd) {
+    
+    DTRACE("%ld:Begun handshake with CLIENT=%d.\n", (long)getppid(), client_fd);
+
+    if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
+        perror("(initiate_handshake) write(): Server took too long sending message or write failed.");
+        return -1;
+    }
+
+    return 0;
+}
+
+int validate_client(int client_fd) {
+
+    if((pass = read_client_message(client_fd)) == NULL) {
+        perror("(handshake) read_client_message(): Reading the client's password failed.");
+        return -1;
+    }
+
+    if(strcmp(pass, SECRET) != 0) {
+        perror("(handshake) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
+        write(client_fd, ERROR, strlen(ERROR));
+        return -1;
+    }
+
+    return 0;
+}
+
+/** Opens the PTY and creates the connection between bash and the client by forking off a subprocess 
+ * to run bash.
+ * 
+ * client_fd: An integer corresponding to the client's file descriptor.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
+int open_pty(int client_fd) {
+    
+    char * pty_slave;
+    int pty_master, err;
+    struct epoll_event ep_ev[2];
+    client_t *client = client_fd_tuple[client_fd];
+
+    DTRACE("%ld:Opening PTY with CLIENT=%d.\n", (long)getppid(), client_fd);  
+
+    /** Open an unused pty dev and store the fd for later reference.
+     * 
+     * O_RDWR = Open pty for read/write.
+     * O_NOCTTY = Don't make it a controlling terminal for the process.
+     * O_CLOEXEC = Close the fd on exec.
+    */
+    if((pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
+        perror("(open_pty) posix_openpt(): Failed openpt.");
+        return -1;        
+    }
+
+    /* Set pty_master to get closed when bash execs. */
+    fcntl(pty_master, F_SETFD, FD_CLOEXEC);
+    
+    /** Attempt to kickstart the master.
+     * 
+     * Grantpt = Creates a child process that executes a set-user-ID-root
+     *          program changing ownership of the slave to be the same as  
+     *          the effective user ID of the calling process and changes 
+     *          permissions so the owner has R/W permissions.
+     * Unlockpt = Removes the internal lock placed on the slave corresponding 
+     *          to the pty. (This must be after grantpt).
+     * ptsname = Returns the name of the pty slave corresponding to the pty 
+     *          master referred to by pty_master. (/dev/pts/nn).
+     */
+    if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (pty_slave = ptsname(pty_master)) == NULL) {
+        err = errno;
+        close(pty_master);
+        errno = err;
+        return -1;
+    }
+
+    pty_slave = (char *) malloc(1024);
+    strcpy(pty_slave, ptsname(pty_master));
+
+    if((set_nonblocking_fd(pty_master) || set_nonblocking_fd(client_fd)) == -1) {
+        perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
+    }
+
+    client -> pty_fd = pty_master;
+    client_fd_tuple[pty_master] = client;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = pty_master;
+
+    if(epoll_ctl(efd, EPOLL_CTL_ADD, pty, &ev) == -1) {
+        perror("(open_pty) epoll_ctl(): Failed to add PTY to epoll.");
+        return -1;
+    }
+
+    /* Create bash subprocess. */
+    if(fork() == 0) {
+        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n", (long)getppid(), pty_master, pty_slave);  
+        
+        close(pty_master);  /* No longer needed. Close it. */
+        close(client_fd);   /* No longer needed. Close it. */
+
+        if(create_bash_process(pty_slave) == -1) {
+            perror("(open_pty) create_bash_process(): Failed to create bash process.");
+        }
+
+        /* It should never reach this point. */
+        exit(EXIT_FAILURE);
+    }
+
+    write(client_fd, PROCEED, strlen(PROCEED));
+    DTRACE("%ld:Completed handshake with CLIENT=%d.\n", (long)getppid(), client_fd);
+    client -> state = established;
+
+    DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), client->pty_fd);
+    free(pty_slave);
+
+    return 0;
+}
+
+/** Sets up a PTY for the bash process and redirects stdin, stdout, and stderr to the fd.
+ * 
+ * pty_slave: A string corresponding to a subprocess slave pty name.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
+int create_bash_process(char *pty_slave) {
+
+    int pty_slave_fd;
+
+    if(setsid() == -1) {
+        perror("(create_bash_process) setsid(): Could not create a new session.");
+        return -1;            
+    }
+
+    /** Setup the pty for the bash subprocess.
+     * 
+     * O_RDWR = Open pty for read/write.
+     * O_NOCTTY = Don't make it a controlling terminal for the process.
+     * O_CLOEXEC = Close the fd on exec.
+    */
+    if((pty_slave_fd = open(pty_slave, O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
+        perror("(create_bash_process) open(): Failed opening PTY_SLAVE.");
+        return -1;
+    }
+
+    DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
+    
+    if ((dup2(pty_slave_fd, STDIN_FILENO) == -1) || (dup2(pty_slave_fd, STDOUT_FILENO) == -1) || (dup2(pty_slave_fd, STDERR_FILENO) == -1)) {
+        perror("(create_bash_process) dup2(): Redirecting FD 0, 1, or 2 failed");
+        exit(EXIT_FAILURE); 
+    }
+
+    close(pty_slave_fd);
+    free(pty_slave);
+    execlp("bash", "bash", NULL);
+
+    DTRACE("%ld:Failed to exec bash on SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
+
+    return -1;
 }
 
 /** Creates the server by setting up the socket and begins listening.
@@ -256,227 +481,6 @@ void  *handle_client(void *client_fd_ptr) {
     return NULL;
 }
 
-/** Conducts a three-way handshake with the client to verify that it is 
- * authorized to connect. The handshake will timeout if it takes too long 
- * to authenticate the client.
- * 
- * client_fd: An integer corresponding to the clients's file descriptor.
- * 
- * Returns: An integer corresponding to the success 0, or failure -1.
-*/
-int handshake(int client_fd) {
-    
-    DTRACE("%ld:Starting handshake with CLIENT=%d.\n", (long)getppid(), client_fd);   
-
-    /* Three second timer. */
-    static struct itimerspec timer;
-    timer.it_value.tv_sec = 3;
-
-    /* Create the signal handler and event for the timer. */
-    struct sigaction sig_act;
-    sig_act.sa_flags = SA_SIGINFO;
-    sig_act.sa_sigaction = &sighandshake_handler;
-
-    struct sigevent sig_ev;
-    sig_ev.sigev_signo = SIGALRM;
-    sig_ev.sigev_notify = SIGEV_THREAD_ID;
-
-    int alarm = 0;
-    char *pass;
-    timer_t timer_id;
-
-    sigemptyset(&sig_act.sa_mask);
-
-    if(sigaction(SIGALRM, &sig_act, NULL) == -1) {
-        perror("(handshake) sigaction(): Error setting up sigaction.");
-    }
-
-    /* Set the timer to the specific thread. */
-    sig_ev.sigev_value.sival_ptr = &alarm;
-    sig_ev._sigev_un._tid = syscall(SYS_gettid);
-
-    if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
-        perror("(handshake) write(): Server took too long sending message or write failed.");
-        return -1;
-    }
-
-    if(timer_create(CLOCK_REALTIME, &sig_ev, &timer_id) == -1) {
-        perror("(handshake) timer_create(): Error creating handshake timer.");
-    }
-
-    if(timer_settime(timer_id, 0, &timer, NULL) == -1) {
-        perror("(handshake) timer_settime(): Error setting handshake timer duration.");
-    }
-
-    if((pass = read_client_message(client_fd)) == NULL) {
-        perror("(handshake) read_client_message(): Reading the client's password failed.");
-        return -1;
-    }
-
-    if(alarm) {
-        perror("(handshake) alarm: Client took too long sending the password.");
-        return -1;
-    }
-
-    if(signal(SIGALRM, SIG_IGN) == SIG_ERR) {
-        perror("(handshake) signal(): Failed to ignore the handshake signal.");
-    }
-
-    if(timer_delete(timer_id) == -1) {
-        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
-    }
-
-    if(strcmp(pass, SECRET) != 0) {
-        perror("(handshake) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
-        write(client_fd, ERROR, strlen(ERROR));
-        return -1;
-    } else {
-        write(client_fd, PROCEED, strlen(PROCEED));
-    }
-
-    DTRACE("%ld:Completed handshake with CLIENT=%d.\n", (long)getppid(), client_fd);  
-
-    return 0;
-}
-
-/** Opens the PTY and creates the connection between bash and the client by forking off a subprocess 
- * to run bash.
- * 
- * client_fd: An integer corresponding to the client's file descriptor.
- * 
- * Returns: An integer corresponding to the success 0, or failure -1.
-*/
-int open_pty(int client_fd) {
-    
-    char * pty_slave;
-    int pty_master, err;
-    struct epoll_event ep_ev[2];
-    pid_t b_pid;
-
-    DTRACE("%ld:Opening PTY with CLIENT=%d.\n", (long)getppid(), client_fd);  
-
-    /** Open an unused pty dev and store the fd for later reference.
-     * 
-     * O_RDWR = Open pty for read/write.
-     * O_NOCTTY = Don't make it a controlling terminal for the process.
-     * O_CLOEXEC = Close the fd on exec.
-    */
-    if((pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
-        perror("(open_pty) posix_openpt(): Failed openpt.");
-        return -1;        
-    }
-
-    /* Set pty_master to get closed when bash execs. */
-    fcntl(pty_master, F_SETFD, FD_CLOEXEC);
-
-    if(set_nonblocking_fd(pty_master) == -1) {
-        perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
-    }
-    
-    /** Attempt to kickstart the master.
-     * 
-     * Grantpt = Creates a child process that executes a set-user-ID-root
-     *          program changing ownership of the slave to be the same as  
-     *          the effective user ID of the calling process and changes 
-     *          permissions so the owner has R/W permissions.
-     * Unlockpt = Removes the internal lock placed on the slave corresponding 
-     *          to the pty. (This must be after grantpt).
-     * ptsname = Returns the name of the pty slave corresponding to the pty 
-     *          master referred to by pty_master. (/dev/pts/nn).
-     */
-    if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (pty_slave = ptsname(pty_master)) == NULL) {
-        err = errno;
-        close(pty_master);
-        errno = err;
-        return -1;
-    }
-
-    pty_slave = (char *) malloc(1024);
-    strcpy(pty_slave, ptsname(pty_master));
-
-    /* Create bash subprocess. */
-    if((b_pid = fork()) == 0) {
-        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n", (long)getppid(), pty_master, pty_slave);  
-        
-        close(pty_master);  /* No longer needed. Close it. */
-        close(client_fd);   /* No longer needed. Close it. */
-
-        if(create_bash_process(pty_slave) == -1) {
-            perror("(open_pty) create_bash_process(): Failed to create bash process.");
-        }
-
-        /* It should never reach this point. */
-        exit(EXIT_FAILURE);
-    }
-
-    DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), (int)b_pid);  
-    free(pty_slave);
-
-    client_fd_tuples[client_fd] = pty_master;
-    client_fd_tuples[pty_master] = client_fd;
-
-    /* Setup the epoll event handling (R/W). */
-    ep_ev[0].data.fd = client_fd;
-    ep_ev[0].events = EPOLLIN | EPOLLET;
-
-    ep_ev[1].data.fd = pty_master;
-    ep_ev[1].events = EPOLLIN | EPOLLET;
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, ep_ev) == -1) {
-        perror("(open_pty) epoll_ctl(): Error creating epoll_ctl for the client_fd.");
-        return -1;
-    }
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, ep_ev + 1) == -1) {
-        perror("(open_pty) epoll_ctl(): Error creating epoll_ctl for the pty_master.");
-        return -1;
-    }
-    
-    return 0;
-}
-
-/** Sets up a PTY for the bash process and redirects stdin, stdout, and stderr to the fd.
- * 
- * pty_slave: A string corresponding to a subprocess slave pty name.
- * 
- * Returns: An integer corresponding to the success 0, or failure -1.
-*/
-int create_bash_process(char *pty_slave) {
-
-    int pty_slave_fd;
-
-    if(setsid() == -1) {
-        perror("(create_bash_process) setsid(): Could not create a new session.");
-        return -1;            
-    }
-
-    /** Setup the pty for the bash subprocess.
-     * 
-     * O_RDWR = Open pty for read/write.
-     * O_NOCTTY = Don't make it a controlling terminal for the process.
-     * O_CLOEXEC = Close the fd on exec.
-    */
-    if((pty_slave_fd = open(pty_slave, O_RDWR | O_NOCTTY | O_CLOEXEC)) == -1) {
-        perror("(create_bash_process) open(): Failed opening PTY_SLAVE.");
-        return -1;
-    }
-
-    DTRACE("%ld:Creating bash and connecting it to SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
-    
-    if ((dup2(pty_slave_fd, STDIN_FILENO) == -1) || (dup2(pty_slave_fd, STDOUT_FILENO) == -1) || (dup2(pty_slave_fd, STDERR_FILENO) == -1)) {
-        perror("(create_bash_process) dup2(): Redirecting FD 0, 1, or 2 failed");
-        exit(EXIT_FAILURE); 
-    }
-
-    close(pty_slave_fd);
-    free(pty_slave);
-    execlp("bash", "bash", NULL);
-
-    DTRACE("%ld:Failed to exec bash on SLAVE_FD=%i.\n", (long)getppid(), pty_slave_fd); 
-
-    return -1;
-}
-
 int set_nonblocking_fd(int fd) {
     
     int fd_flags;
@@ -497,21 +501,6 @@ int set_nonblocking_fd(int fd) {
     }
 
     return 0;
-}
-
-/** Timer handler for the handshake. Sets a flag to 1 if it has executed.
- * 
- * signal: Unused.
- * sip: Contains singal information such as the signal number, value, etc. Used to 
- *      set the appropriate flag so it can be seen elsewhere.
- * ignore: Unused.
- * 
- * Returns: None.
-*/
-void sighandshake_handler(int signal, siginfo_t * sip, void * ignore)
-{
-    *(int *) sip->si_ptr = 1;
-    //DTRACE("%ld:Has alarm value: %d\n", (long)getpid(), *(int *) (sip->si_ptr));
 }
 
 /** Reads the handshake messages.
@@ -588,12 +577,31 @@ int transfer_data(int from, int to) {
  * Returns: None.
 */
 void graceful_exit(int fd) {
-    
+    client_t *client = client_fd_tuple[fd];
+
     DTRACE("%ld:Started exit procedure.\n", (long)getpid());
+    /* If we haven't completed client setup, just close the fd. */
+    if(client == NULL) {
+        close(fd);
+        return;
+    }
+
+    int sock = client -> socket_fd;
+    int pty = client -> pty_fd;
 
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)fd);
-    close(fd);
+    epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL);
+    if(close(fd) != -1) {
+        client_fd_tuple[fd] = NULL;
+    }
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)client_fd_tuples[fd]);
-    close(client_fd_tuples[fd]);
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty);
+    if(client -> state == terminated) {
+        epoll_ctl(efd, EPOLL_CTL_DEL, pty, NULL);
+        if(close(pty) != -1) {
+            client_fd_tuple[pty] = NULL;
+        }
+    }
+
+    free(client);
 }
