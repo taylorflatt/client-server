@@ -1,4 +1,4 @@
-/** Lab3: Server 10/16/2017 for CS 591.
+/** Lab5: Server 10/16/2017 for CS 591.
  * 
  * Author: Taylor Flatt
  * 
@@ -44,6 +44,20 @@
 #include <time.h>
 #include <unistd.h>
 #include "DTRACE.h"
+
+/* Custom types. */
+typedef enum cstate {
+    new,
+    established,
+    unwritten,
+    terminated
+} cstate_t
+
+typedef struct client {
+    int socket_fd;
+    int pty_fd;
+    cstate_t state;
+} client_t
 
 /* Preprocessor constants. */
 #define PORT 4070

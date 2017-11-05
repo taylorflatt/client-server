@@ -1,4 +1,4 @@
-/** Lab3: Client 10/16/2017 for CS 591.
+/** Lab5: Client 10/16/2017 for CS 591.
  * 
  * Author: Taylor Flatt
  * 
