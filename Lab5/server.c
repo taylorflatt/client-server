@@ -49,7 +49,6 @@
 /* Custom types. */
 typedef enum cstate {
     new,
-    registered,
     established,
     unwritten,
     terminated
@@ -73,26 +72,29 @@ typedef struct client {
 
 /* Prototypes. */
 int create_server();
-void *epoll_listener(void * ignore);
-void *handle_client(void *client_fd_ptr);
-int handshake(int client_fd);
+void handle_io(int fd);
+void client_connect();
+cstate_t get_cstate(int fd);
+int register_client(int sock);
+int initiate_handshake(int client_fd);
+int validate_client(int client_fd);
 int open_pty(int client_fd);
 int create_bash_process(char *pty_slave);
+void *epoll_listener(void * ignore);
 int set_nonblocking_fd(int fd);
-void sighandshake_handler(int signal, siginfo_t * sip, void * ignore);
 char *read_client_message(int client_fd);
 int transfer_data(int from, int to);
 void graceful_exit(int exit_status);
 
 /* Global Variables */
-/* A map to store the fd for pty/socket. */
-int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
+/* A map to store the clients. */
+client_t *client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 int epoll_fd;
 
+/* Allows epoll to perform the client handshake if an event comes in on the listening socket. */
+int listen_fd
+
 int main(int argc, char *argv[]) {
-    int client_fd;
-    int *client_fd_ptr;
-    pthread_t thread_id;
 
     tpool_init(handle_io);
 
@@ -121,6 +123,48 @@ int main(int argc, char *argv[]) {
     epoll_listener();
 
     exit(EXIT_FAILURE);
+}
+
+/** Creates the server by setting up the socket and begins listening.
+ * 
+ * Returns: An integer corresponding to server's file descriptor on success or failure -1.
+*/
+int create_server() {
+    int server_sockfd;
+    struct sockaddr_in server_address;
+
+    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("(create_server) socket(): Error creating socket.");
+    }
+
+    int i = 1;
+    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
+        perror("(create_server) setsockopt(): Error setting sockopt.");
+        return -1;
+    }
+
+    /* Name the socket and set the port. */
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_address.sin_port = htons(PORT);
+
+    if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
+        perror("(create_server) bind(): Error assigning address to socket.");
+        return -1;
+    }
+
+    if((listen(server_sockfd, 10)) == -1){
+        perror("(create_server) listen(): Error listening to socket.");
+        return -1;
+    }
+
+    /* Setup epoll for connection listener. */
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = server_sockfd;
+    epoll_ctl(efd, EPOLL_CTL_ADD, server_sockfd, &ev);
+
+    return 0;
 }
 
 void handle_io(int fd) {
@@ -169,7 +213,7 @@ int register_client(int sock) {
     struct epoll_event ev;
     client_t *client = (client_t *) malloc(sizeof(client_t));
     client -> socket_fd = sock;
-    client -> state = registered;
+    client -> state = new;
     client -> pty_fd = -1;      /* No pty created for the client yet. */
 
     client_fd_tuples[sock] = client;
@@ -200,12 +244,12 @@ int initiate_handshake(int client_fd) {
 int validate_client(int client_fd) {
 
     if((pass = read_client_message(client_fd)) == NULL) {
-        perror("(handshake) read_client_message(): Reading the client's password failed.");
+        perror("(validate_client) read_client_message(): Reading the client's password failed.");
         return -1;
     }
 
     if(strcmp(pass, SECRET) != 0) {
-        perror("(handshake) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
+        perror("(validate_client) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     }
@@ -345,48 +389,6 @@ int create_bash_process(char *pty_slave) {
     return -1;
 }
 
-/** Creates the server by setting up the socket and begins listening.
- * 
- * Returns: An integer corresponding to server's file descriptor on success or failure -1.
-*/
-int create_server() {
-    int server_sockfd;
-    struct sockaddr_in server_address;
-
-    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("(create_server) socket(): Error creating socket.");
-    }
-
-    int i = 1;
-    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-        perror("(create_server) setsockopt(): Error setting sockopt.");
-        return -1;
-    }
-
-    /* Name the socket and set the port. */
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(PORT);
-
-    if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
-        perror("(create_server) bind(): Error assigning address to socket.");
-        return -1;
-    }
-
-    if((listen(server_sockfd, 10)) == -1){
-        perror("(create_server) listen(): Error listening to socket.");
-        return -1;
-    }
-
-    /* Setup epoll for connection listener. */
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = server_sockfd;
-    epoll_ctl(efd, EPOLL_CTL_ADD, server_sockfd, &ev);
-
-    return 0;
-}
-
 /** An epoll listener which handles communication between the client and server by 
  * waiting for read/write events to come through on available file descriptors.
  * 
@@ -426,37 +428,6 @@ void *epoll_listener(void * ignore) {
             }
         }
     }
-}
-
-/** Handles a client attempting to connect by conducting the handshake, setting the 
- * nonblocking parameter, and opening the pty.
- * 
- * client_fd_ptr: A pointer corresponding to the client's file descriptor (int).
- * 
- * Returns: None.
-*/
-void  *handle_client(void *client_fd_ptr) {
-
-    /* Dereference the int pointer and get rid of the memory now that we no longer need it. */
-    int client_fd = *(int *) client_fd_ptr;
-    free(client_fd_ptr);
-    pthread_detach(pthread_self());
-
-    if(handshake(client_fd) == -1) {
-        perror("(handle_client) handshake(): Client failed the handshake.");
-        close(client_fd);
-        return NULL;
-    }
-
-    if(set_nonblocking_fd(client_fd) == -1) {
-        perror("(handle_client) set_nonblocking_fd(): Error setting client to non-blocking.");
-    }
-
-    if(open_pty(client_fd) == -1) {
-        perror("(handle_client) open_pty(): Failed to open pty and start bash.");
-    }
-
-    return NULL;
 }
 
 int set_nonblocking_fd(int fd) {
@@ -576,6 +547,8 @@ void graceful_exit(int fd) {
     if(close(fd) != -1) {
         client_fd_tuple[fd] = NULL;
     }
+
+    client -> state = terminated;
 
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty);
     if(client -> state == terminated) {
