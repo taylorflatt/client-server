@@ -44,6 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "DTRACE.h"
+#include "tpool.h"
 
 /* Custom types. */
 typedef enum cstate {
@@ -539,10 +540,19 @@ char *read_client_message(int client_fd)
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
 */
-int transfer_data(int from, int to) {
+void transfer_data(int from) {
     
     char buf[MAX_LENGTH];
     ssize_t nread, nwrite;
+    client_t *client = client_fd_tuple[from];
+    int to;
+
+    /* Determine where the data should go. */
+    if(from == client -> pty_fd) {
+        to = client -> socket_fd;
+    } else {
+        to = client -> pty_fd;
+    }
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if((nwrite = write(to, buf, nread) == -1)) {
@@ -554,20 +564,15 @@ int transfer_data(int from, int to) {
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
         perror("(transfer_data) nread_errno: Failed reading data.");
-        return -1;
-    }
-    /*
-    if(nwrite == -1 && errno == EPIPE) {
-        DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(),to);
-        return -1;
-    }
-    */
-    if(nread == 0) {
-        DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
-        return -1;
+        graceful_exit(from);
     }
 
-    return 0;
+    if(nread == 0) {
+        DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
+        graceful_exit(from);
+    }
+
+    return;
 }
 
 /** Called in order to close file descriptors when the client is finished.
