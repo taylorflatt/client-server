@@ -44,7 +44,7 @@
 #include "DTRACE.h"
 #include "tpool.h"
 
-/* Custom types. */
+/* Client object. */
 typedef enum cstate {
     new,
     established,
