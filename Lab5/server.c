@@ -56,8 +56,8 @@ typedef struct client {
     int                 socket_fd;
     int                 pty_fd;
     cstate_t            state;
-    char[MAX_LENGTH]    unwritten
-    size_t              nunwritten  /* Size of the unwritten buffer. */
+    char[MAX_LENGTH]    unwritten;
+    size_t              nunwritten;  /* Size of the unwritten buffer. */
 } client_t;
 
 /* Preprocessor constants. */
@@ -219,7 +219,7 @@ int register_client(int sock) {
 
     client_fd_tuples[sock] = client;
 
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = sock;
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock, &ev) == -1) {
@@ -424,9 +424,18 @@ void epoll_listener() {
             if(ev_list[i].events & EPOLLIN) {
                 DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
                 tpool_add_task(ev_list[i].data.fd);
+
+                /* Create a temporary epoll_event to rearm the fd. */
+                struct epoll_event t_ev;
+                t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                t_ev.data.fd = ev_list[i].data.fd;
+
+                if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ev_list[i].data.fd, &t_ev) == -1) {
+                    perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+                    return -1;
+                }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
-                // TODO: Need to set client state to terminated.
                 graceful_exit(ev_list[i].data.fd);
             }
         }
@@ -514,10 +523,10 @@ void transfer_data(int from) {
     // processing the next time.
 
     // The client has unwritten data.
-    if(get_cstate(client) == unwritten) {
+    if(get_cstate(client -> socket_fd) == unwritten) {
         // TODO: MAX_LENGTH here is not sufficient. I can have data less than the buffer size.
         if((nwrite = write(to, client -> unwritten, client -> nunwritten) == -1)) {
-            perror("(transfer_data) write(): Failed writing data.");
+            perror("(transfer_data) write(): Failed writing partial write data.");
         }
 
         // There is still data left in the buffer to write.
@@ -540,7 +549,7 @@ void transfer_data(int from) {
             perror("(transfer_data) write(): Failed writing data.");
         }
     }
-    
+
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
         perror("(transfer_data) nread_errno: Failed reading data.");
