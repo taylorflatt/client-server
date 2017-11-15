@@ -44,6 +44,16 @@
 #include "DTRACE.h"
 #include "tpool.h"
 
+/* Preprocessor constants. */
+#define PORT 4070
+#define MAX_LENGTH 4096
+#define MAX_NUM_CLIENTS 64000
+#define MAX_EVENTS 24
+#define SECRET "cs407rembash\n"
+#define CHALLENGE "<rembash>\n"
+#define PROCEED "<ok>\n"
+#define ERROR "<error>\n"
+
 /* Client object. */
 typedef enum cstate {
     new,
@@ -56,19 +66,9 @@ typedef struct client {
     int                 socket_fd;
     int                 pty_fd;
     cstate_t            state;
-    char[MAX_LENGTH]    unwritten;
+    char                unwritten[MAX_LENGTH];
     size_t              nunwritten;  /* Size of the unwritten buffer. */
 } client_t;
-
-/* Preprocessor constants. */
-#define PORT 4070
-#define MAX_LENGTH 4096
-#define MAX_NUM_CLIENTS 64000
-#define MAX_EVENTS 24
-#define SECRET "cs407rembash\n"
-#define CHALLENGE "<rembash>\n"
-#define PROCEED "<ok>\n"
-#define ERROR "<error>\n"
 
 /* Prototypes. */
 int create_server();
@@ -432,7 +432,7 @@ void epoll_listener() {
 
                 if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ev_list[i].data.fd, &t_ev) == -1) {
                     perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
-                    return -1;
+                    return;
                 }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
