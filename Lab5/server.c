@@ -160,7 +160,7 @@ int create_server() {
     /* Setup epoll for connection listener. */
     set_nonblocking_fd(listen_fd);
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = listen_fd;
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev);
 
@@ -168,6 +168,8 @@ int create_server() {
 }
 
 void handle_io(int fd) {
+
+    DTRACE("%ld:IO Discovered on fd=%d.\n", (long)getppid(), fd);
 
     if(fd == listen_fd) {
         client_connect();
@@ -185,8 +187,14 @@ void client_connect() {
 
     int client_fd;
 
-    if((client_fd = accept(listen_fd, (struct sockaddr *) NULL, NULL)) == -1) {
+    if((client_fd = accept(listen_fd, (struct sockaddr *) NULL, NULL)) == -1 && errno != EAGAIN) {
         perror("(client_connect) accept(): Error making a connection with the client.");
+        return;
+    }
+
+    if(client_fd == -1) {
+        perror("STOP");
+        return;
     }
 
     // What if we have too many clients on our server for our client_fd_tuples?
@@ -209,6 +217,8 @@ cstate_t get_cstate(int fd) {
 
 
 int register_client(int sock) {
+
+    DTRACE("%ld:Begun registering CLIENT=%d.\n", (long)getppid(), sock);
 
     struct epoll_event ev;
     client_t *client = (client_t *) malloc(sizeof(client_t));
@@ -243,6 +253,8 @@ int initiate_handshake(int client_fd) {
 }
 
 int validate_client(int client_fd) {
+
+    DTRACE("%ld:Begun validation of CLIENT=%d.\n", (long)getppid(), client_fd);
 
     char *pass;
 
@@ -315,9 +327,12 @@ int open_pty(int client_fd) {
         perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
 
+    /* Set the pty fd for the client. */
     client -> pty_fd = pty_master;
+
+    /* Add an entry into the map for the pty fd which is a copy of the client struct. */
     client_fd_tuples[pty_master] = client;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = pty_master;
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, &ev) == -1) {
@@ -343,6 +358,10 @@ int open_pty(int client_fd) {
     write(client_fd, PROCEED, strlen(PROCEED));
     DTRACE("%ld:Completed handshake with CLIENT=%d.\n", (long)getppid(), client_fd);
     client -> state = established;
+
+    if(client -> state == established) {
+        DTRACE("%ld:Client state is ESTABLISHED.\n", (long)getppid());
+    }
 
     DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), client->pty_fd);
     free(pty_slave);

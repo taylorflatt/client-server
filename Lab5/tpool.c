@@ -162,20 +162,20 @@ static void* thread_loop(void *thr) {
     int task;
 
     /* DEBUG: Required to print the thread info. */
-    thread *_thread;
-    _thread = (thread *) thr;
+//    thread *_thread;
+//    _thread = (thread *) thr;
 
     /* If the queue is empty, wait. Then run any new jobs. */
     while(1) {
         pool_wait(tpool.queue -> has_jobs);
         pthread_mutex_lock(&tpool.queue -> mutex);
         task = dequeue(tpool.queue);
-        DTRACE("Thread %c: Received %d\n", _thread -> id, task);
+//        DTRACE("Thread %c: Received %d\n", _thread -> id, task);
         pthread_mutex_unlock(&tpool.queue -> mutex);
 
         tpool.subroutine(task);
 
-        DTRACE("Thread %c: Completed %d\n", _thread -> id, task);
+//        DTRACE("Thread %c: Completed %d\n", _thread -> id, task);
     }
 
     return NULL;
@@ -253,7 +253,7 @@ static int enqueue(job_queue *q, int task) {
     /* Move the tail down. */
     q -> tail = (q -> tail + 1) % q -> len;
 
-    DTRACE("Queue: Received %d\n", task);
+//    DTRACE("Queue: Received %d\n", task);
 
     /* Signal that there is a new task */
     pthread_mutex_lock(&q -> has_jobs -> mutex);
