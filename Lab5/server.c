@@ -53,9 +53,11 @@ typedef enum cstate {
 } cstate_t;
 
 typedef struct client {
-    int socket_fd;
-    int pty_fd;
-    cstate_t state;
+    int                 socket_fd;
+    int                 pty_fd;
+    cstate_t            state;
+    char[MAX_LENGTH]    unwritten
+    size_t              nunwritten  /* Size of the unwritten buffer. */
 } client_t;
 
 /* Preprocessor constants. */
@@ -213,6 +215,7 @@ int register_client(int sock) {
     client -> socket_fd = sock;
     client -> state = new;
     client -> pty_fd = -1;      /* No pty created for the client yet. */
+    client -> nunwritten = 0;   /* No unwritten data in its buffer yet. */
 
     client_fd_tuples[sock] = client;
 
@@ -502,13 +505,42 @@ void transfer_data(int from) {
         to = client -> pty_fd;
     }
 
-    while((nread = read(from, buf, MAX_LENGTH)) > 0) {
-        if((nwrite = write(to, buf, nread) == -1)) {
+    // TODO: I could include a pointer that points to the START of the unwritten data which 
+    // would solve the problem of multiple partial writes which didn't completely write the 
+    // unwritten buffer. However, write works by starting from the beginning of a buffer and 
+    // writing n-bytes of data. So it MIGHT require the use of an additional buffer or a different 
+    // function to work regardless. So it may not be useful to complicate the client struct
+    // further and instead just shift the unwritten bytes to the beginning of the buffer for 
+    // processing the next time.
+
+    // The client has unwritten data.
+    if(get_cstate(client) == unwritten) {
+        // TODO: MAX_LENGTH here is not sufficient. I can have data less than the buffer size.
+        if((nwrite = write(to, client -> unwritten, client -> nunwritten) == -1)) {
             perror("(transfer_data) write(): Failed writing data.");
-            break;
         }
+
+        // There is still data left in the buffer to write.
+        if(client -> nunwritten > nwrite) {
+            client -> nunwritten -= nwrite;
+
+            // Require memmove since the memory locations might overlap. This needs EXTENSIVE testing.
+            memmove(client -> unwritten, client -> unwritten + nwrite, client -> nunwritten);
+
+        } else {
+            client -> nunwritten = 0;
+            client -> state = established;
+        }
+
+        return;
     }
 
+    if((nread = read(from, buf, MAX_LENGTH)) > 0) {
+        if((nwrite = write(to, buf, nread) == -1)) {
+            perror("(transfer_data) write(): Failed writing data.");
+        }
+    }
+    
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
         perror("(transfer_data) nread_errno: Failed reading data.");
@@ -518,6 +550,13 @@ void transfer_data(int from) {
     if(nread == 0) {
         DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
         graceful_exit(from);
+    }
+
+    // There is a partial write. Store the unwritten data in the client buffer and change state.
+    if(nwrite < nread) {
+        client -> nunwritten = nread - nwrite;
+        memcpy(client -> unwritten, buf + nread, client -> nunwritten);
+        client -> state = unwritten;
     }
 
     return;
