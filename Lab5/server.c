@@ -190,6 +190,18 @@ void handle_io(int fd) {
     } else {
         transfer_data(fd);
     }
+
+    /* Create a temporary epoll_event to rearm the fd. */
+    struct epoll_event t_ev;
+    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+    t_ev.data.fd = fd;
+
+    DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), fd);
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &t_ev) == -1) {
+        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+        return;
+    }
 }
 
 void client_connect() {
@@ -548,6 +560,7 @@ void transfer_data(int from) {
 
     // The client has unwritten data.
     if(get_cstate(client -> socket_fd) == unwritten) {
+        DTRACE("%ld:There is unwritten data on fd=%d.\n", (long)getpid(), client -> socket_fd);
         // TODO: MAX_LENGTH here is not sufficient. I can have data less than the buffer size.
         if((nwrite = write(to, client -> unwritten, client -> nunwritten) == -1)) {
             perror("(transfer_data) write(): Failed writing partial write data.");
@@ -584,23 +597,14 @@ void transfer_data(int from) {
 
         // There is a partial write. Store the unwritten data in the client buffer and change state.
         if(nwrite < nread) {
+	    DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite, (int)nread);
+exit(0);
             client -> nunwritten = nread - nwrite;
             memcpy(client -> unwritten, buf + nread, client -> nunwritten);
             client -> state = unwritten;
         }
     }
 
-    /* Create a temporary epoll_event to rearm the fd. */
-    struct epoll_event t_ev;
-    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    t_ev.data.fd = from;
-
-    DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), from);
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, from, &t_ev) == -1) {
-        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
-        return;
-    }
 
     return;
 }
@@ -624,7 +628,7 @@ void graceful_exit(int fd) {
     int sock = client -> socket_fd;
     int pty = client -> pty_fd;
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)fd);
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)sock);
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
     if(close(sock) != -1) {
         client_fd_tuples[sock] = NULL;
