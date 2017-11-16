@@ -182,31 +182,14 @@ void handle_io(int fd) {
 
     if(fd == listen_fd) {
         client_connect();
-    } else {
-        client_t *client = client_fd_tuples[fd];
-
-        if(client -> state == new) {
-            DTRACE("%ld:Client state for fd=%d is NEW.\n", (long)getppid(), fd);
-            if(validate_client(fd) || open_pty(fd)) {
-                perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
-                graceful_exit(fd);
-            }
-        } else {
-            DTRACE("%ld:Client state for fd=%d is ESTABLISHED.\n", (long)getppid(), fd);
-            transfer_data(fd);
+    } else if(get_cstate(fd) == new) {
+        if(validate_client(fd) || open_pty(fd)) {
+            perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
+            graceful_exit(fd);
         }
+    } else {
+        transfer_data(fd);
     }
-
-//    if(fd == listen_fd) {
-//        client_connect();
-//    } else if(get_cstate(fd) == new) {
-//        if(validate_client(fd) || open_pty(fd)) {
-//            perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
-//            graceful_exit(fd);
-//        }
-//   } else {
-//        transfer_data(fd);
-//    }
 }
 
 void client_connect() {
@@ -312,7 +295,7 @@ int open_pty(int client_fd) {
     struct epoll_event ev;
     client_t *client = client_fd_tuples[client_fd];
 
-    DTRACE("%ld:Opening PTY with CLIENT=%d.\n", (long)getppid(), client_fd);  
+    DTRACE("%ld:Opening PTY for CLIENT=%d.\n", (long)getppid(), client_fd);  
 
     /** Open an unused pty dev and store the fd for later reference.
      * 
@@ -340,7 +323,7 @@ int open_pty(int client_fd) {
      *          master referred to by pty_master. (/dev/pts/nn).
      */
     if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (pty_slave = ptsname(pty_master)) == NULL) {
-        err = errno;
+        err = errno;        /* Preserve the error. */
         close(pty_master);
         errno = err;
         return -1;
@@ -354,7 +337,7 @@ int open_pty(int client_fd) {
         perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
 
-    /* Add the pty master to epoll with oneshot enabled. */
+    /* Add the pty master to epoll with oneshot and edge-triggered enabled. */
     ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = pty_master;
 
@@ -378,18 +361,19 @@ int open_pty(int client_fd) {
         exit(EXIT_FAILURE);
     }
 
+    /* Send the go-ahead message to the client. */
     write(client_fd, PROCEED, strlen(PROCEED));
     DTRACE("%ld:Completed handshake with CLIENT=%d.\n", (long)getppid(), client_fd);
     client -> state = established;
 
     if(client -> state == established) {
-        DTRACE("%ld:Client state is ESTABLISHED.\n", (long)getppid());
+        DTRACE("%ld:Client state is now ESTABLISHED.\n", (long)getppid());
     }
 
     /* Set the pty fd for the client. */
     client -> pty_fd = pty_master;
 
-    /* Add an entry into the map for the pty fd which is a copy of the client struct. (Should be after state change). */
+    /* Add an entry into the map for the pty fd which is a copy of the client struct. */
     client_fd_tuples[pty_master] = client;
 
     DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), client->pty_fd);
