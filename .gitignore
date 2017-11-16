@@ -51,6 +51,7 @@ Module.symvers
 Mkfile.old
 dkms.conf
 .vscode/settings.json
+test/*
 Lab*/client
 Lab*/server
 Lab3/client
@@ -66,7 +67,6 @@ Lab3/BrokenClients/client-parent-sigquit
 Lab3/BrokenClients/client-wait-on-connect
 Lab3/BrokenClients/client-wait-on-handshake
 Lab3/BrokenClients/client-failed-secret
-Lab4/lab.tgz.old
 Lab4/test
 Lab4/testa
 Lab4/testso

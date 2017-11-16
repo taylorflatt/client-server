@@ -136,6 +136,8 @@ int create_server() {
         perror("(create_server) socket(): Error creating socket.");
     }
 
+    DTRACE("%ld:Starting server with fd=%d.\n", (long)getppid(), listen_fd);
+
     int i = 1;
     if(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
         perror("(create_server) setsockopt(): Error setting sockopt.");
@@ -157,12 +159,19 @@ int create_server() {
         return -1;
     }
 
+    if(set_nonblocking_fd(listen_fd) == -1) {
+        perror("(create_server) set_nonblocking_fd(): Error setting listen_fd to non-blocking.");
+    }
+
     /* Setup epoll for connection listener. */
-    set_nonblocking_fd(listen_fd);
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+    ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
     ev.data.fd = listen_fd;
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev);
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev) == -1) {
+        perror("(create_server) epoll_ctl(): Failed to add socket to epoll.");
+        return -1;
+    }
 
     return 0;
 }
@@ -173,14 +182,31 @@ void handle_io(int fd) {
 
     if(fd == listen_fd) {
         client_connect();
-    } else if(get_cstate(fd) == new) {
-        if(validate_client(fd) || open_pty(fd)) {
-            perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
-            graceful_exit(fd);
-        }
     } else {
-        transfer_data(fd);
+        client_t *client = client_fd_tuples[fd];
+
+        if(client -> state == new) {
+            DTRACE("%ld:Client state for fd=%d is NEW.\n", (long)getppid(), fd);
+            if(validate_client(fd) || open_pty(fd)) {
+                perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
+                graceful_exit(fd);
+            }
+        } else {
+            DTRACE("%ld:Client state for fd=%d is ESTABLISHED.\n", (long)getppid(), fd);
+            transfer_data(fd);
+        }
     }
+
+//    if(fd == listen_fd) {
+//        client_connect();
+//    } else if(get_cstate(fd) == new) {
+//        if(validate_client(fd) || open_pty(fd)) {
+//            perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
+//            graceful_exit(fd);
+//        }
+//   } else {
+//        transfer_data(fd);
+//    }
 }
 
 void client_connect() {
@@ -323,15 +349,12 @@ int open_pty(int client_fd) {
     pty_slave = (char *) malloc(1024);
     strcpy(pty_slave, ptsname(pty_master));
 
+    /* Set the pty and client sockets to non-blocking mode. */
     if((set_nonblocking_fd(pty_master) || set_nonblocking_fd(client_fd)) == -1) {
         perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
 
-    /* Set the pty fd for the client. */
-    client -> pty_fd = pty_master;
-
-    /* Add an entry into the map for the pty fd which is a copy of the client struct. */
-    client_fd_tuples[pty_master] = client;
+    /* Add the pty master to epoll with oneshot enabled. */
     ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = pty_master;
 
@@ -362,6 +385,12 @@ int open_pty(int client_fd) {
     if(client -> state == established) {
         DTRACE("%ld:Client state is ESTABLISHED.\n", (long)getppid());
     }
+
+    /* Set the pty fd for the client. */
+    client -> pty_fd = pty_master;
+
+    /* Add an entry into the map for the pty fd which is a copy of the client struct. (Should be after state change). */
+    client_fd_tuples[pty_master] = client;
 
     DTRACE("%ld:SLAVE_PID=%d.\n", (long)getppid(), client->pty_fd);
     free(pty_slave);
@@ -426,16 +455,9 @@ void epoll_listener() {
 
     while(1) {
         events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
+        //events = epoll_wait(epoll_fd, ev_list, MAX_NUM_CLIENTS * 2, -1);
 
-        if(events == -1) {
-            if(errno == EINTR) {
-                continue;
-            } else {
-                perror("(epoll_listener) events_errno: Epoll loop error.");
-                exit(EXIT_FAILURE);
-            }
-        }
-
+        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
         DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
 
         for(i = 0; i < events; i++) {
@@ -443,19 +465,18 @@ void epoll_listener() {
             if(ev_list[i].events & EPOLLIN) {
                 DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
                 tpool_add_task(ev_list[i].data.fd);
-
-                /* Create a temporary epoll_event to rearm the fd. */
-                struct epoll_event t_ev;
-                t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-                t_ev.data.fd = ev_list[i].data.fd;
-
-                if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ev_list[i].data.fd, &t_ev) == -1) {
-                    perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
-                    return;
-                }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
                 graceful_exit(ev_list[i].data.fd);
+            }
+        }
+
+        if(events == -1) {
+            if(errno == EINTR) {
+                continue;
+            } else {
+                perror("(epoll_listener) events_errno: Epoll loop error.");
+                exit(EXIT_FAILURE);
             }
         }
     }
@@ -559,32 +580,42 @@ void transfer_data(int from) {
             client -> nunwritten = 0;
             client -> state = established;
         }
+    } else {
+        if((nread = read(from, buf, MAX_LENGTH)) > 0) {
+            if((nwrite = write(to, buf, nread) == -1)) {
+                perror("(transfer_data) write(): Failed writing data.");
+            }
+        }
 
-        return;
-    }
+        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+            DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
+            perror("(transfer_data) nread_errno: Failed reading data.");
+            graceful_exit(from);
+        }
 
-    if((nread = read(from, buf, MAX_LENGTH)) > 0) {
-        if((nwrite = write(to, buf, nread) == -1)) {
-            perror("(transfer_data) write(): Failed writing data.");
+        if(nread == 0) {
+            DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
+            graceful_exit(from);
+        }
+
+        // There is a partial write. Store the unwritten data in the client buffer and change state.
+        if(nwrite < nread) {
+            client -> nunwritten = nread - nwrite;
+            memcpy(client -> unwritten, buf + nread, client -> nunwritten);
+            client -> state = unwritten;
         }
     }
 
-    if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-        DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
-        perror("(transfer_data) nread_errno: Failed reading data.");
-        graceful_exit(from);
-    }
+    /* Create a temporary epoll_event to rearm the fd. */
+    struct epoll_event t_ev;
+    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+    t_ev.data.fd = from;
 
-    if(nread == 0) {
-        DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
-        graceful_exit(from);
-    }
+    DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), from);
 
-    // There is a partial write. Store the unwritten data in the client buffer and change state.
-    if(nwrite < nread) {
-        client -> nunwritten = nread - nwrite;
-        memcpy(client -> unwritten, buf + nread, client -> nunwritten);
-        client -> state = unwritten;
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, from, &t_ev) == -1) {
+        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+        return;
     }
 
     return;
