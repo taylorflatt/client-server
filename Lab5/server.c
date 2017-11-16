@@ -596,7 +596,7 @@ void transfer_data(int from) {
         }
 
         // There is a partial write. Store the unwritten data in the client buffer and change state.
-        if(nwrite < nread) {
+        if(nread < nwrite) {
 	    DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite, (int)nread);
 exit(0);
             client -> nunwritten = nread - nwrite;
