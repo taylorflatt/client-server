@@ -1,4 +1,4 @@
-/** Lab5: Server 10/16/2017 for CS 591.
+/** Lab5: Server 11/18/2017 for CS 591.
  * 
  * Author: Taylor Flatt
  * 
@@ -18,6 +18,15 @@
  * 
  * Usage: server
 */
+
+/** Checklist
+ *  (1) Ctrl + C results in a segfault and exits the server. Obviously something is going wrong with 
+ *      the exit procedure and/or additional tasks are being run after memory has been ridded.
+ *  (2) Partial writes will hang on the server causing all I/O to cease for all clients. One observation 
+ *      is that if a single character is sent, the server picks it up and will perform the write.
+ *  (3) Finish the timerfds.
+ * 
+ */
 
 #define _POSIX_C_SOURCE 200809L // Required for timers.
 #define _XOPEN_SOURCE 700 // Required for pty.
@@ -41,6 +50,7 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/timerfd.h>
 #include "DTRACE.h"
 #include "tpool.h"
 
@@ -68,6 +78,7 @@ typedef struct client {
     cstate_t            state;
     char                unwritten[MAX_LENGTH];
     size_t              nunwritten;  /* Size of the unwritten buffer. */
+    int 				timer_fd;
 } client_t;
 
 /* Prototypes. */
@@ -89,7 +100,9 @@ void graceful_exit(int exit_status);
 /* Global Variables */
 /* A map to store the clients. */
 client_t *client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
+client_t client_fd_tuples_mem[MAX_NUM_CLIENTS * 2 + 5];
 int epoll_fd;
+int t_epoll_fd;
 
 /* Allows epoll to perform the client handshake if an event comes in on the listening socket. */
 int listen_fd;
@@ -100,6 +113,11 @@ int main(int argc, char *argv[]) {
 
     if((epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
         perror("(Main) epoll_create1(): Error creating EPOLL.");
+        exit(EXIT_FAILURE);
+    }
+    
+    if((t_epoll_fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
+        perror("(Main) epoll_create1(): Error creating T-EPOLL.");
         exit(EXIT_FAILURE);
     }
 
@@ -121,6 +139,18 @@ int main(int argc, char *argv[]) {
     }
 
     epoll_listener();
+    
+    /* Make method */
+    
+    /* Setup epoll for connection listener. */
+    struct epoll_event ev;
+    ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
+    ev.data.fd = t_epoll_fd;
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, t_epoll_fd, &ev) == -1) {
+        perror("(create_server) epoll_ctl(): Failed to add socket to epoll.");
+        return -1;
+    }
 
     exit(EXIT_FAILURE);
 }
@@ -178,7 +208,7 @@ int create_server() {
 
 void handle_io(int fd) {
 
-    DTRACE("%ld:IO Discovered on fd=%d.\n", (long)getppid(), fd);
+    //DTRACE("%ld:IO Discovered on fd=%d.\n", (long)getppid(), fd);
 
     if(fd == listen_fd) {
         client_connect();
@@ -187,8 +217,37 @@ void handle_io(int fd) {
             perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
             graceful_exit(fd);
         }
-    } else {
+    } else if(get_cstate(fd) == terminated) {
+			perror("(handle_io) DO NOTHING - CLIENT SHOULD BE TERMINATED");
+	} else {
         transfer_data(fd);
+    }
+    
+    /* Create a temporary epoll_event to rearm the fd. */
+    struct epoll_event t_ev;
+    
+    if(fd != listen_fd) {
+		client_t *client = client_fd_tuples[fd];
+		
+		if(client -> state == unwritten) {
+			DTRACE("%ld:State of fd=%d is UNWRITTEN.\n", (long)getppid(), fd);
+			t_ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+		} else {
+			//DTRACE("%ld:State of fd=%d is ESTABLISHED.\n", (long)getppid(), fd);
+			t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+		}
+	} else {
+		DTRACE("%ld:Rearming LISTENING fd=%d.\n", (long)getppid(), fd);
+		t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+	}
+    
+    t_ev.data.fd = fd;
+
+    //DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), fd);
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &t_ev) == -1) {
+        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+        return;
     }
 }
 
@@ -230,7 +289,7 @@ int register_client(int sock) {
     DTRACE("%ld:Begun registering CLIENT=%d.\n", (long)getppid(), sock);
 
     struct epoll_event ev;
-    client_t *client = (client_t *) malloc(sizeof(client_t));
+    client_t *client = &client_fd_tuples_mem[sock];
     client -> socket_fd = sock;
     client -> state = new;
     client -> pty_fd = -1;      /* No pty created for the client yet. */
@@ -253,8 +312,34 @@ int initiate_handshake(int client_fd) {
     
     DTRACE("%ld:Begun handshake with CLIENT=%d.\n", (long)getppid(), client_fd);
 
+    /* Three second timer. */
+    static struct itimerspec timer;
+    timer.it_value.tv_sec = 3;
+    int timer_fd;
+    
+    /* Set non-blocking and close on exec. */
+    if((timer_fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC)) == -1) {
+        perror("(handshake) timer_create(): Error creating handshake timer.");
+    }
+    
+    if(timerfd_settime(timer_fd, 0, &timer, NULL) == -1) {
+		perror("(handshake) timerfd_settime(): Error setting handshake timer.");
+	}
+    
     if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
         perror("(initiate_handshake) write(): Server took too long sending message or write failed.");
+        return -1;
+    }
+    
+    client_t *client = client_fd_tuples[client_fd];
+	client -> timer_fd = timer_fd;
+	
+	struct epoll_event t_ev;
+    t_ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
+    t_ev.data.fd = timer_fd;
+	
+	if(epoll_ctl(t_epoll_fd, EPOLL_CTL_ADD, timer_fd, &t_ev) == -1) {
+        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
         return -1;
     }
 
@@ -277,6 +362,12 @@ int validate_client(int client_fd) {
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     }
+    
+    client_t *client = client_fd_tuples[client_fd];
+
+    if (close(client -> timer_fd) == -1) {
+        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
+	}
 
     return 0;
 }
@@ -433,22 +524,31 @@ int create_bash_process(char *pty_slave) {
 */
 void epoll_listener() {
 
-    struct epoll_event ev_list[MAX_EVENTS];
-    int events;
+    struct epoll_event ev_list[MAX_EVENTS], t_ev_list[MAX_EVENTS];
+    int events, t_events;
     int i;
 
     while(1) {
         events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
         //events = epoll_wait(epoll_fd, ev_list, MAX_NUM_CLIENTS * 2, -1);
 
-        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
-        DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
+        //DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getppid(), events, ev_list[0].data.fd);
 
         for(i = 0; i < events; i++) {
             /* Check if there is an event and the associated fd is available for reading. */
-            if(ev_list[i].events & EPOLLIN) {
-                DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
+            if(ev_list[i].events & (EPOLLIN | EPOLLOUT)) {
+                //DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
+                /* Process timer. */
+                if(ev_list[i].events == t_epoll_fd) {
+					t_events = epoll_pwait(t_epoll_fd, t_ev_list, MAX_EVENTS, -1, 0);
+					
+					//for(i = 0; i < t_events; i++) {
+					//	//TIMER HERE
+					//	client_t *client = client_fd_tuples[t_ev_list[i].data.fd];
+					//}
+                }
                 tpool_add_task(ev_list[i].data.fd);
+
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
                 graceful_exit(ev_list[i].data.fd);
@@ -548,27 +648,34 @@ void transfer_data(int from) {
 
     // The client has unwritten data.
     if(get_cstate(client -> socket_fd) == unwritten) {
-        // TODO: MAX_LENGTH here is not sufficient. I can have data less than the buffer size.
-        if((nwrite = write(to, client -> unwritten, client -> nunwritten) == -1)) {
+        DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
+        //DTRACE("%ld:Before UNWRITTEN write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
+        if((nwrite = write(to, client -> unwritten, client -> nunwritten)) == -1) {
             perror("(transfer_data) write(): Failed writing partial write data.");
         }
+        //DTRACE("%ld:After UNWRITTEN write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
+        
+        DTRACE("%ld:Unwritten fd=%d, nwrite=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite);
 
         // There is still data left in the buffer to write.
         if(client -> nunwritten > nwrite) {
+			DTRACE("%ld:There is STILL unwritten data on fd=%d with nwrite=%d and nunwritten=%d.\n", (long)getpid(), from, (int)nwrite, (int)client -> nunwritten);
             client -> nunwritten -= nwrite;
 
             // Require memmove since the memory locations might overlap. This needs EXTENSIVE testing.
             memmove(client -> unwritten, client -> unwritten + nwrite, client -> nunwritten);
+            //DTRACE("%ld:After MEMMOVE write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
 
         } else {
+			DTRACE("%ld:Unwritten data has been completely written for fd=%d.\n", (long)getpid(), from);
             client -> nunwritten = 0;
             client -> state = established;
         }
     } else {
         if((nread = read(from, buf, MAX_LENGTH)) > 0) {
-            if((nwrite = write(to, buf, nread) == -1)) {
-                perror("(transfer_data) write(): Failed writing data.");
-            }
+			//DTRACE("%ld:Before NORMAL write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, buf);
+            nwrite = write(to, buf, nread);
+            //DTRACE("%ld:After NORMAL write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, buf);
         }
 
         if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
@@ -581,25 +688,33 @@ void transfer_data(int from) {
             DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
             graceful_exit(from);
         }
+        
+        if(nwrite == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+			DTRACE("%ld:Error write()'ing from FD %d\n", (long)getpid(), from);
+            perror("(transfer_data) nwrite_errno: Failed writing data.");
+            graceful_exit(from);
+		}
+		
+		if(nwrite == -1) {
+			nwrite = 0;
+		}
 
         // There is a partial write. Store the unwritten data in the client buffer and change state.
         if(nwrite < nread) {
+			DTRACE("\n\n\n\n\n\n\n");
+			DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), from, (int)nwrite, (int)nread);
+			DTRACE("\n\n\n\n\n\n\n");
+			
             client -> nunwritten = nread - nwrite;
-            memcpy(client -> unwritten, buf + nread, client -> nunwritten);
+            memcpy(client -> unwritten, buf + nwrite, client -> nunwritten);
+            // buffer: ABCDEF
+            // read: 6
+            // write: 2
+            // nunwritten: 6 - 2 = 4
+            // unwritten: CDEF
+            // ERROR -> unwritten: ABCD
             client -> state = unwritten;
         }
-    }
-
-    /* Create a temporary epoll_event to rearm the fd. */
-    struct epoll_event t_ev;
-    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    t_ev.data.fd = from;
-
-    DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), from);
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, from, &t_ev) == -1) {
-        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
-        return;
     }
 
     return;
@@ -624,7 +739,7 @@ void graceful_exit(int fd) {
     int sock = client -> socket_fd;
     int pty = client -> pty_fd;
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)fd);
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)sock);
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
     if(close(sock) != -1) {
         client_fd_tuples[sock] = NULL;
@@ -639,6 +754,8 @@ void graceful_exit(int fd) {
             client_fd_tuples[pty] = NULL;
         }
     }
+    
+    client = NULL;
 
-    free(client);
+    //free(client);
 }
