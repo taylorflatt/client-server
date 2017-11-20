@@ -101,6 +101,9 @@ void graceful_exit(int exit_status);
 /* A map to store the clients. */
 client_t *client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 client_t client_fd_tuples_mem[MAX_NUM_CLIENTS * 2 + 5];
+int timer_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
+
+/* Epoll fds. */
 int epoll_fd;
 int t_epoll_fd;
 
@@ -138,19 +141,21 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    epoll_listener();
-    
-    /* Make method */
-    
+    /* MAKE METHOD */
     /* Setup epoll for connection listener. */
     struct epoll_event ev;
     ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
     ev.data.fd = t_epoll_fd;
 
+    DTRACE("%ld:Setting epoll timerfd=%d.\n", (long)getppid(), t_epoll_fd);
+
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, t_epoll_fd, &ev) == -1) {
         perror("(create_server) epoll_ctl(): Failed to add socket to epoll.");
-        return -1;
+        exit(EXIT_FAILURE);
     }
+
+    epoll_listener();
+    
 
     exit(EXIT_FAILURE);
 }
@@ -317,27 +322,31 @@ int initiate_handshake(int client_fd) {
     timer.it_value.tv_sec = 3;
     int timer_fd;
     
-    /* Set non-blocking and close on exec. */
-    if((timer_fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC)) == -1) {
-        perror("(handshake) timer_create(): Error creating handshake timer.");
-    }
-    
-    if(timerfd_settime(timer_fd, 0, &timer, NULL) == -1) {
-		perror("(handshake) timerfd_settime(): Error setting handshake timer.");
-	}
-    
     if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
         perror("(initiate_handshake) write(): Server took too long sending message or write failed.");
         return -1;
     }
+
+    /* Set non-blocking and close on exec. */
+    if((timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC)) == -1) {
+        perror("(handshake) timer_create(): Error creating handshake timer.");
+    }
+    
+    if(timerfd_settime(timer_fd, TFD_TIMER_ABSTIME, &timer, NULL) == -1) {
+		perror("(handshake) timerfd_settime(): Error setting handshake timer.");
+	}
     
     client_t *client = client_fd_tuples[client_fd];
-	client -> timer_fd = timer_fd;
+    client -> timer_fd = timer_fd;
+
+    /* Store the client fd in an array that is indexed by the timer fd so it can be found in the epoll loop. */
+    timer_fd_tuples[timer_fd] = client_fd;
 	
 	struct epoll_event t_ev;
     t_ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
     t_ev.data.fd = timer_fd;
-	
+    
+    /* Add the timer to the timer epoll. */
 	if(epoll_ctl(t_epoll_fd, EPOLL_CTL_ADD, timer_fd, &t_ev) == -1) {
         perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
         return -1;
@@ -357,17 +366,22 @@ int validate_client(int client_fd) {
         return -1;
     }
 
+    client_t *client = client_fd_tuples[client_fd];
+
+    if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL) == -1) {
+        perror("(validate_client) epoll_ctl(): Failed to delete timer socket in epoll.");
+        return -1;
+    }
+
+    if (close(client -> timer_fd) == -1) {
+        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
+    }
+
     if(strcmp(pass, SECRET) != 0) {
         perror("(validate_client) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     }
-    
-    client_t *client = client_fd_tuples[client_fd];
-
-    if (close(client -> timer_fd) == -1) {
-        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
-	}
 
     return 0;
 }
@@ -525,8 +539,8 @@ int create_bash_process(char *pty_slave) {
 void epoll_listener() {
 
     struct epoll_event ev_list[MAX_EVENTS], t_ev_list[MAX_EVENTS];
-    int events, t_events;
-    int i;
+    int events, t_events, client_timer_fd;
+    int i, j;
 
     while(1) {
         events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
@@ -537,18 +551,21 @@ void epoll_listener() {
         for(i = 0; i < events; i++) {
             /* Check if there is an event and the associated fd is available for reading. */
             if(ev_list[i].events & (EPOLLIN | EPOLLOUT)) {
-                //DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
-                /* Process timer. */
-                if(ev_list[i].events == t_epoll_fd) {
+                /* If the event is a timer, process it. Otherwise transfer data. */
+                if(ev_list[i].data.fd == t_epoll_fd) { 
 					t_events = epoll_pwait(t_epoll_fd, t_ev_list, MAX_EVENTS, -1, 0);
-					
-					//for(i = 0; i < t_events; i++) {
-					//	//TIMER HERE
-					//	client_t *client = client_fd_tuples[t_ev_list[i].data.fd];
-					//}
+                    
+                    /* Process the elapsed timers. */
+					for(j = 0; j < t_events; j++) {
+                        client_timer_fd = timer_fd_tuples[t_ev_list[j].data.fd];
+                        client_t *client = client_fd_tuples[client_timer_fd];
+                        DTRACE("%ld:A timer has expired on t_epoll_fd=%d with timer_fd=%d for client=%d.\n", (long)getpid(), t_epoll_fd, t_ev_list[j].data.fd, client -> socket_fd); 
+                        // NEED TO GRACEFULLY EXIT HERE.
+					}
+                } else {
+                    //DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
+                    tpool_add_task(ev_list[i].data.fd);
                 }
-                tpool_add_task(ev_list[i].data.fd);
-
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
                 graceful_exit(ev_list[i].data.fd);
@@ -743,6 +760,12 @@ void graceful_exit(int fd) {
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
     if(close(sock) != -1) {
         client_fd_tuples[sock] = NULL;
+    }
+
+    DTRACE("%ld:Closing timer fd=%ld.\n", (long)getpid(), (long)sock);
+    epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL);
+    if(close(client -> timer_fd) != -1) {
+        timer_fd_tuples[client -> timer_fd] = -1;
     }
 
     client -> state = terminated;
