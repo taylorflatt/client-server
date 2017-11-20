@@ -67,6 +67,7 @@
 /* Client object. */
 typedef enum cstate {
     new,
+    validated,
     established,
     unwritten,
     terminated
@@ -232,7 +233,13 @@ void handle_io(int fd) {
     struct epoll_event t_ev;
     
     if(fd != listen_fd) {
-		client_t *client = client_fd_tuples[fd];
+
+        /* If the client has been terminated, then do not process anything. */
+        if(client_fd_tuples[fd] == NULL) {
+            return;
+        }
+
+        client_t *client = client_fd_tuples[fd]; 
 		
 		if(client -> state == unwritten) {
 			DTRACE("%ld:State of fd=%d is UNWRITTEN.\n", (long)getpid(), fd);
@@ -371,16 +378,9 @@ int validate_client(int client_fd) {
         return -1;
     }
 
-//    client_t *client = client_fd_tuples[client_fd];
-
-//    if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL) == -1) {
-//        perror("(validate_client) epoll_ctl(): Failed to delete timer socket in epoll.");
-//        return -1;
-//    }
-
-//    if (close(client -> timer_fd) == -1) {
-//        perror("(handshake) timer_delete(): Failed to delete the handshake timer.");
-//    }
+    /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
+    client_t *client = client_fd_tuples[client_fd];
+    client -> state = validated;
 
     if(strcmp(pass, SECRET) != 0) {
         perror("(validate_client) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
@@ -570,9 +570,8 @@ void epoll_listener() {
                             DTRACE("%ld:A timer has expired on t_epoll_fd=%d with timer_fd=%d for client=%d.\n", (long)getpid(), t_epoll_fd, t_ev_list[j].data.fd, client_fd);   
 
                             DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
-                            if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, , NULL) == -1) {
+                            if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
                                 perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
-                                return -1;
                             }
 
                             close(timer_fd);
@@ -580,7 +579,7 @@ void epoll_listener() {
                         }
 					}
                 } else {
-                    //DTRACE("%ld:Adding task to the thread pool.\n", (long)getpid()); 
+                    DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
                     tpool_add_task(ev_list[i].data.fd);
                 }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
@@ -672,6 +671,10 @@ void transfer_data(int from) {
         to = client -> pty_fd;
     }
 
+    if(client -> state == terminated) {
+        return;
+    }
+
     // TODO: I could include a pointer that points to the START of the unwritten data which 
     // would solve the problem of multiple partial writes which didn't completely write the 
     // unwritten buffer. However, write works by starting from the beginning of a buffer and 
@@ -761,35 +764,48 @@ void transfer_data(int from) {
  * Returns: None.
 */
 void graceful_exit(int fd) {
-    client_t *client = client_fd_tuples[fd];
 
     DTRACE("%ld:Started exit procedure.\n", (long)getpid());
-    /* If we haven't completed client setup, just close the fd. */
-    if(client == NULL) {
-        close(fd);
+
+    if(client_fd_tuples[fd] == NULL) {
+        DTRACE("%ld:ERROR!!!!.\n", (long)getpid());
         return;
     }
 
-    int sock = client -> socket_fd;
-    int pty = client -> pty_fd;
+    client_t *client = client_fd_tuples[fd];
+    int client_fd = client -> socket_fd;    
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)sock);
-    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, NULL);
-    if(close(sock) != -1) {
-        client_fd_tuples[sock] = NULL;
+    /* If we haven't completed client setup, just close the fd. */
+    if(client -> state == new) {
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
+        epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL);
+
+        if(close(client_fd) != -1) {
+            client_fd_tuples[client_fd] = NULL;
+        }
+
+        return;
     }
 
-    client -> state = terminated;
+    client -> state = terminated;    
+    
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)client_fd);
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty);
+    /* Close the client fd and remove the client's reference in the struct. */
+    if(close(client_fd) != -1) {
+        client_fd_tuples[client_fd] = NULL;
+    }
+
+    int pty_fd = client -> pty_fd;
+
+    /* Close the pty fd and remove the pty's reference in the struct. */
+    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty_fd);
     if(client -> state == terminated) {
-        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty, NULL);
-        if(close(pty) != -1) {
-            client_fd_tuples[pty] = NULL;
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL);
+
+        if(close(pty_fd) != -1) {
+            client_fd_tuples[pty_fd] = NULL;
         }
     }
-    
-    client = NULL;
-
-    //free(client);
 }
