@@ -5,11 +5,10 @@
  * Properties:
  *   -- parallel/concurrent server.
  *   -- uses epoll in order to handle read/writes.
- *   -- uses two pthreads in order to handle clients.
- *           (1) conducts the handshake and verification and is temporary.
- *           (2) conducts the reading/writing between all clients and is permanent (epoll).
+ *   -- uses a thread pool to handle client connection and reading/writing between all clients.
  *   -- uses read()/write() for all I/O.
  *   -- forces reads/writes to be in non-blocking mode.
+ *   -- handles partial-writes by storing unwritten data inside the client object for later processing. 
  *   -- sets SIGCHLD to be ignored in server to avoid having to collect client handling subprocesses.
  *   -- handles broken/malicious clients in the handshake process (timeout).
  * 
@@ -18,15 +17,6 @@
  * 
  * Usage: server
 */
-
-/** Checklist
- *  (1) Ctrl + C results in a segfault and exits the server. Obviously something is going wrong with 
- *      the exit procedure and/or additional tasks are being run after memory has been ridded.
- *  (2) Partial writes will hang on the server causing all I/O to cease for all clients. One observation 
- *      is that if a single character is sent, the server picks it up and will perform the write.
- *  (3) Finish the timerfds.
- * 
- */
 
 #define _POSIX_C_SOURCE 200809L // Required for timers.
 #define _XOPEN_SOURCE 700 // Required for pty.
