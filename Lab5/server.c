@@ -378,15 +378,15 @@ int validate_client(int client_fd) {
         return -1;
     }
 
-    /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
-    client_t *client = client_fd_tuples[client_fd];
-    client -> state = validated;
-
     if(strcmp(pass, SECRET) != 0) {
         perror("(validate_client) strcmp(): Server took too long comparing the challenge, the compare failed, or invalid secret.");
         write(client_fd, ERROR, strlen(ERROR));
         return -1;
     }
+
+    /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
+    //client_t *client = client_fd_tuples[client_fd];
+    //client -> state = validated;
 
     return 0;
 }
@@ -577,7 +577,18 @@ void epoll_listener() {
                             close(timer_fd);
                             graceful_exit(client_fd);
                         }
-					}
+                    }
+                    
+                    DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
+                    struct epoll_event t_ev;
+                    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                    t_ev.data.fd = t_epoll_fd;
+
+                    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, t_epoll_fd, &t_ev) == -1) {
+                        perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
+                        return;
+                    }
+
                 } else {
                     DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
                     tpool_add_task(ev_list[i].data.fd);
