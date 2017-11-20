@@ -435,7 +435,7 @@ int validate_client(int client_fd) {
 
     /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
     //client_t *client = client_fd_tuples[client_fd];
-    //client_fd_tuples[client_fd] -> state = validated;
+    client_fd_tuples[client_fd] -> state = validated;
 
     return 0;
 }
@@ -832,12 +832,8 @@ void graceful_exit(int fd) {
         client_fd_tuples[client_fd] = NULL;
     }
 
-    /* If we haven't completed client setup, just close the fd. */
+    /* If we haven't completed client setup we don't have a pty to close. Just return. */
     if(client -> state == new) {
-        if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL) == -1) {
-            perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
-        }
-
         return;
     }
     

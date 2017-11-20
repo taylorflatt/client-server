@@ -72,3 +72,13 @@ Lab4/testa
 Lab4/testso
 Lab5/largeFileCat
 Lab5/test.file
+Lab5/BrokenClients/client-child-sigint
+Lab5/BrokenClients/client-child-sigquit
+Lab5/BrokenClients/client-failed-challenge
+Lab5/BrokenClients/client-failed-port
+Lab5/BrokenClients/client-failed-proceed
+Lab5/BrokenClients/client-failed-secret
+Lab5/BrokenClients/client-parent-sigquit
+Lab5/BrokenClients/client-parent-sigint
+Lab5/BrokenClients/client-wait-on-connect
+Lab5/BrokenClients/client-wait-on-handshake
