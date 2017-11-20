@@ -686,14 +686,6 @@ void transfer_data(int from) {
         return;
     }
 
-    // TODO: I could include a pointer that points to the START of the unwritten data which 
-    // would solve the problem of multiple partial writes which didn't completely write the 
-    // unwritten buffer. However, write works by starting from the beginning of a buffer and 
-    // writing n-bytes of data. So it MIGHT require the use of an additional buffer or a different 
-    // function to work regardless. So it may not be useful to complicate the client struct
-    // further and instead just shift the unwritten bytes to the beginning of the buffer for 
-    // processing the next time.
-
     // The client has unwritten data.
     if(get_cstate(client -> socket_fd) == unwritten) {
         DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
@@ -786,35 +778,37 @@ void graceful_exit(int fd) {
     client_t *client = client_fd_tuples[fd];
     int client_fd = client -> socket_fd;    
 
-    /* If we haven't completed client setup, just close the fd. */
-    if(client -> state == new) {
-        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
-        epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL);
-
-        if(close(client_fd) != -1) {
-            client_fd_tuples[client_fd] = NULL;
-        }
-
-        return;
-    }
-
-    client -> state = terminated;    
-    
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)client_fd);
-    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
+    /* Delete the client fd from epoll. */
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL) == -1) {
+        perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
+    }
 
     /* Close the client fd and remove the client's reference in the struct. */
     if(close(client_fd) != -1) {
         client_fd_tuples[client_fd] = NULL;
     }
 
+    /* If we haven't completed client setup, just close the fd. */
+    if(client -> state == new) {
+        if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, client -> timer_fd, NULL) == -1) {
+            perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
+        }
+
+        return;
+    }
+    
+    client -> state = terminated;    
+
     int pty_fd = client -> pty_fd;
 
-    /* Close the pty fd and remove the pty's reference in the struct. */
     DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty_fd);
     if(client -> state == terminated) {
-        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL);
+        if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
+            perror("(graceful_exit) epoll_ctl(): Failed to delete the pty fd in epoll.");
+        }
 
+        /* Close the pty fd and remove the pty's reference in the struct. */
         if(close(pty_fd) != -1) {
             client_fd_tuples[pty_fd] = NULL;
         }
