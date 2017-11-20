@@ -370,9 +370,6 @@ int initiate_handshake(int client_fd) {
     /* Three second timer. */
     static struct itimerspec timer;
     timer.it_value.tv_sec = 3;
-    timer.it_value.tv_nsec = 0;
-    timer.it_interval.tv_sec = 0;
-    timer.it_interval.tv_nsec = 0;
     int timer_fd;
     
     if(write(client_fd, CHALLENGE, strlen(CHALLENGE)) == -1) {
@@ -821,7 +818,7 @@ void graceful_exit(int fd) {
     client_t *client = client_fd_tuples[fd];
     int client_fd = client -> socket_fd;    
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)client_fd);
+    DTRACE("%ld:Closing the client_fd=%ld.\n", (long)getpid(), (long)client_fd);
     /* Delete the client fd from epoll. */
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL) == -1) {
         perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
@@ -841,7 +838,7 @@ void graceful_exit(int fd) {
 
     int pty_fd = client -> pty_fd;
 
-    DTRACE("%ld:Closing pty_fd=%ld.\n", (long)getpid(), (long)pty_fd);
+    DTRACE("%ld:Closing the pty_fd=%ld.\n", (long)getpid(), (long)pty_fd);
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
         perror("(graceful_exit) epoll_ctl(): Failed to delete the pty_fd in epoll.");
     }
