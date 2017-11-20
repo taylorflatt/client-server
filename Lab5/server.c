@@ -256,7 +256,6 @@ void handle_io(int fd) {
     t_ev.data.fd = fd;
 
     //DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), fd);
-
     if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &t_ev) == -1) {
         perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
         return;
