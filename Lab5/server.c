@@ -84,6 +84,7 @@ typedef struct client {
 
 /* Prototypes. */
 int create_server();
+int listen_for_timers();
 void handle_io(int fd);
 void client_connect();
 cstate_t get_cstate(int fd);
@@ -130,6 +131,12 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    /* Adds the timer epoll fd onto the main epoll so that timer events can be caught and handled. */
+    if((listen_for_timers()) == -1) {
+        perror("(Main) listen_for_timers(): Error adding the timer fd to the main epoll.");
+        exit(EXIT_FAILURE);
+    }
+
     /* Forces writes to closed sockets to return an error rather than a signal. */
     if(signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
         perror("(Main) signal(): Error setting SIGPIPE to SIG_IGN.");
@@ -142,7 +149,18 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    /* MAKE METHOD */
+    epoll_listener();
+
+    exit(EXIT_FAILURE);
+}
+
+/** Adds the timer epoll fd to the main epoll so that all events are captured by the 
+ * main epoll loop.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
+int listen_for_timers() {
+
     /* Setup epoll for connection listener. */
     struct epoll_event ev;
     ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
@@ -151,14 +169,11 @@ int main(int argc, char *argv[]) {
     DTRACE("%ld:Setting epoll timerfd=%d.\n", (long)getpid(), t_epoll_fd);
 
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, t_epoll_fd, &ev) == -1) {
-        perror("(create_server) epoll_ctl(): Failed to add socket to epoll.");
-        exit(EXIT_FAILURE);
+        perror("(listen_for_timers) epoll_ctl(): Failed to add socket to epoll.");
+        return -1;
     }
 
-    epoll_listener();
-    
-
-    exit(EXIT_FAILURE);
+    return 0;
 }
 
 /** Creates the server by setting up the socket and begins listening.
@@ -212,6 +227,11 @@ int create_server() {
     return 0;
 }
 
+/** Handles all of the I/O events based on the client's state. It is also responsible for rearming 
+ * the file descriptor in epoll.
+ * 
+ * Returns: None.
+ */
 void handle_io(int fd) {
 
     //DTRACE("%ld:IO Discovered on fd=%d.\n", (long)getpid(), fd);
@@ -255,13 +275,17 @@ void handle_io(int fd) {
     
     t_ev.data.fd = fd;
 
-    //DTRACE("%ld:Rearming the fd=%d.\n", (long)getpid(), fd);
     if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &t_ev) == -1) {
         perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
         return;
     }
 }
 
+/** Manages accepting a client and bootstrapping the client's registration with a server by initiating 
+ * the handshake.
+ * 
+ * Returns: None.
+ */
 void client_connect() {
 
     int client_fd;
@@ -276,7 +300,15 @@ void client_connect() {
         return;
     }
 
+    //
+    //
+    //
+    //
     // What if we have too many clients on our server for our client_fd_tuples?
+    //
+    //
+    //
+    //
 
     if(register_client(client_fd)) {
         perror("(client_connect) register_client(): Failed to register the client with the server.");
@@ -289,6 +321,12 @@ void client_connect() {
     }
 }
 
+/** Gets the state of a client.
+ * 
+ * fd: An integer corresponding to a client file descriptor.
+ * 
+ * Returns: The state of a client.
+ */
 cstate_t get_cstate(int fd) {
 
     return client_fd_tuples[fd] -> state;
@@ -319,6 +357,12 @@ int register_client(int sock) {
     return 0;
 }
 
+/** Sends the challenge to the client and starts a timer to handle unresponsive clients.
+ * 
+ * client_fd: An integer corresponding to a client's fd.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
 int initiate_handshake(int client_fd) {
     
     DTRACE("%ld:Begun handshake with CLIENT=%d.\n", (long)getpid(), client_fd);
@@ -366,6 +410,12 @@ int initiate_handshake(int client_fd) {
     return 0;
 }
 
+/** Receives the answer from the client validates it.
+ * 
+ * client_fd: An integer corresponding to a client's fd.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
 int validate_client(int client_fd) {
 
     DTRACE("%ld:Begun validation of CLIENT=%d.\n", (long)getpid(), client_fd);
@@ -385,7 +435,7 @@ int validate_client(int client_fd) {
 
     /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
     //client_t *client = client_fd_tuples[client_fd];
-    //client -> state = validated;
+    //client_fd_tuples[client_fd] -> state = validated;
 
     return 0;
 }
@@ -609,6 +659,12 @@ void epoll_listener() {
     }
 }
 
+/** Sets a file descriptor in non-blocking mode.
+ * 
+ * fd: An integer corresponding to a client's fd.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
 int set_nonblocking_fd(int fd) {
     
     int fd_flags;
@@ -657,15 +713,14 @@ char *read_client_message(int client_fd)
   return msg;
 }
 
-/** Actually reads and writes data to and from sockets.
+/** Reads and writes data from a socket to a socket which is associated to a client. It also handles 
+ * partial writes. The destination fd is determined by the client object.
  * 
  * Remarks: Need to check for both since either can be set...
  * EWOULDBLOCK/EAGAIN: If a read is going to block.
  * 
  * from: Integer representing the source file descriptor (read).
- * to: Integer representing the targer file descriptor (write).
  * 
- * Returns: An integer corresponding to the success 0, or failure -1.
 */
 void transfer_data(int from) {
     
@@ -685,14 +740,12 @@ void transfer_data(int from) {
         return;
     }
 
-    // The client has unwritten data.
+    /* The client has unwritten data. */
     if(get_cstate(client -> socket_fd) == unwritten) {
         DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
-        //DTRACE("%ld:Before UNWRITTEN write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
         if((nwrite = write(to, client -> unwritten, client -> nunwritten)) == -1) {
             perror("(transfer_data) write(): Failed writing partial write data.");
         }
-        //DTRACE("%ld:After UNWRITTEN write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
         
         DTRACE("%ld:Unwritten fd=%d, nwrite=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite);
 
@@ -703,7 +756,6 @@ void transfer_data(int from) {
 
             // Require memmove since the memory locations might overlap. This needs EXTENSIVE testing.
             memmove(client -> unwritten, client -> unwritten + nwrite, client -> nunwritten);
-            //DTRACE("%ld:After MEMMOVE write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, client -> unwritten);
 
         } else {
 			DTRACE("%ld:Unwritten data has been completely written for fd=%d.\n", (long)getpid(), from);
@@ -712,9 +764,7 @@ void transfer_data(int from) {
         }
     } else {
         if((nread = read(from, buf, MAX_LENGTH)) > 0) {
-			//DTRACE("%ld:Before NORMAL write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, buf);
             nwrite = write(to, buf, nread);
-            //DTRACE("%ld:After NORMAL write on fd=%d with BUFFER=%s.\n", (long)getpid(), from, buf);
         }
 
         if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
@@ -738,7 +788,7 @@ void transfer_data(int from) {
 			nwrite = 0;
 		}
 
-        // There is a partial write. Store the unwritten data in the client buffer and change state.
+        /* There is a partial write. Store the unwritten data in the client buffer and change state. */
         if(nwrite < nread) {
 			DTRACE("\n\n\n\n\n\n\n");
 			DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), from, (int)nwrite, (int)nread);
@@ -746,12 +796,6 @@ void transfer_data(int from) {
 			
             client -> nunwritten = nread - nwrite;
             memcpy(client -> unwritten, buf + nwrite, client -> nunwritten);
-            // buffer: ABCDEF
-            // read: 6
-            // write: 2
-            // nunwritten: 6 - 2 = 4
-            // unwritten: CDEF
-            // ERROR -> unwritten: ABCD
             client -> state = unwritten;
         }
     }
@@ -801,15 +845,13 @@ void graceful_exit(int fd) {
 
     int pty_fd = client -> pty_fd;
 
-    DTRACE("%ld:Closing fd=%ld.\n", (long)getpid(), (long)pty_fd);
-    if(client -> state == terminated) {
-        if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
-            perror("(graceful_exit) epoll_ctl(): Failed to delete the pty fd in epoll.");
-        }
+    DTRACE("%ld:Closing pty_fd=%ld.\n", (long)getpid(), (long)pty_fd);
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
+        perror("(graceful_exit) epoll_ctl(): Failed to delete the pty_fd in epoll.");
+    }
 
-        /* Close the pty fd and remove the pty's reference in the struct. */
-        if(close(pty_fd) != -1) {
-            client_fd_tuples[pty_fd] = NULL;
-        }
+    /* Close the pty fd and remove the pty's reference in the struct. */
+    if(close(pty_fd) != -1) {
+        client_fd_tuples[pty_fd] = NULL;
     }
 }
