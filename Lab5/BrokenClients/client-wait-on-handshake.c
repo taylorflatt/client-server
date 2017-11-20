@@ -126,7 +126,7 @@ int handshake(int server_fd) {
     ///
     /// FAILURE POINT
     ///
-    sleep(-1);
+    sleep(10);
 
     //  Verify the challenge against known result.
     if(strcmp(h_msg, CHALLENGE) != 0) {

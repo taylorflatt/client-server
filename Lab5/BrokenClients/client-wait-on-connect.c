@@ -114,7 +114,7 @@ int connect_server(const char *server_ip) {
     ///
     /// FAILURE POINT
     ///
-    sleep(-1);
+    sleep(10);
 
     return server_fd;
 }
