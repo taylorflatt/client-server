@@ -479,7 +479,7 @@ int open_pty(int client_fd) {
     strcpy(pty_slave, ptsname(pty_master));
 
     /* Set the pty and client sockets to non-blocking mode. */
-    if((set_nonblocking_fd(pty_master) || set_nonblocking_fd(client_fd)) == -1) {
+    if((set_nonblocking_fd(pty_master) == -1) || (set_nonblocking_fd(client_fd) == -1)) {
         perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
     }
 
@@ -605,14 +605,15 @@ void epoll_listener() {
                         if(client_fd_tuples[client_fd] && client_fd_tuples[client_fd] -> state == new) {
                             DTRACE("%ld:A timer has expired on t_epoll_fd=%d with timer_fd=%d for client=%d.\n", (long)getpid(), t_epoll_fd, t_ev_list[j].data.fd, client_fd);   
 
-                            DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
-                            if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
-                                perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
-                            }
-
-                            close(timer_fd);
                             graceful_exit(client_fd);
                         }
+                        
+						DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
+						if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
+							perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
+						}
+                        
+                        close(timer_fd);
                     }
                     
                     DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
@@ -626,7 +627,7 @@ void epoll_listener() {
                     }
 
                 } else {
-                    DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
+                    //DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
                     tpool_add_task(ev_list[i].data.fd);
                 }
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
@@ -816,17 +817,22 @@ void graceful_exit(int fd) {
 
     /* Close the client fd and remove the client's reference in the struct. */
     if(shutdown(client_fd, SHUT_RDWR) == -1) {
-        perror("(graceful_exit) shutdown(): Failed to stop the client fd from RDWR.");
-    } else {
-        client_fd_tuples[client_fd] = NULL;
+        if(errno == ENOTCONN) {
+			DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected. Attempting close().\n", (long)getpid());
+			close(client_fd);
+		} else {
+			perror("(graceful_exit) shutdown(): WARNING! Failed to stop the client fd from RDWR.");
+		}
     }
-
+	
+    client_fd_tuples[client_fd] = NULL;
+        
     /* If we haven't completed client setup we don't have a pty to close. Just return. */
     if(client -> state == new) {
         return;
     }
     
-    client -> state = terminated;    
+    client -> state = terminated;
 
     int pty_fd = client -> pty_fd;
 
@@ -836,8 +842,8 @@ void graceful_exit(int fd) {
     }
 
     /* Close the pty fd and remove the pty's reference in the struct. */
-    if(shutdown(pty_fd, SHUT_RDWR) == -1) {
-        perror("(graceful_exit) shutdown(): Failed to stop the client fd from RDWR.");
+    if(close(pty_fd) == -1) {
+        perror("(graceful_exit) close(): Failed to close the pty fd.");
     } else {
         client_fd_tuples[pty_fd] = NULL;
     }
