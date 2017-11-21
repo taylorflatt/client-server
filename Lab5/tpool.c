@@ -297,4 +297,3 @@ static int resize_queue(job_queue *q) {
 
     return 0;
 }
-

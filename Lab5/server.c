@@ -815,7 +815,9 @@ void graceful_exit(int fd) {
     }
 
     /* Close the client fd and remove the client's reference in the struct. */
-    if(close(client_fd) != -1) {
+    if(shutdown(client_fd, SHUT_RDWR) == -1) {
+        perror("(graceful_exit) shutdown(): Failed to stop the client fd from RDWR.");
+    } else {
         client_fd_tuples[client_fd] = NULL;
     }
 
@@ -834,7 +836,9 @@ void graceful_exit(int fd) {
     }
 
     /* Close the pty fd and remove the pty's reference in the struct. */
-    if(close(pty_fd) != -1) {
+    if(shutdown(pty_fd, SHUT_RDWR) == -1) {
+        perror("(graceful_exit) shutdown(): Failed to stop the client fd from RDWR.");
+    } else {
         client_fd_tuples[pty_fd] = NULL;
     }
 }
