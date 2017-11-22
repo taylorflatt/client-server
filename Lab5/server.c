@@ -63,6 +63,11 @@ typedef enum cstate {
     terminated
 } cstate_t;
 
+typedef enum epoll_state {
+    IN,
+    OUT
+} estate_t;
+
 typedef struct client {
     int                 socket_fd;
     int                 pty_fd;
@@ -76,6 +81,7 @@ typedef struct client {
 int create_server();
 int listen_for_timers();
 void handle_io(int fd);
+int rearm_fd(int fd, int e_fd, estate_t type);
 void client_connect();
 cstate_t get_cstate(int fd);
 int register_client(int sock);
@@ -241,37 +247,62 @@ void handle_io(int fd) {
 	} else {
         transfer_data(fd);
     }
-    
-    /* Create a temporary epoll_event to rearm the fd. */
-    struct epoll_event t_ev;
+
+    /* Rearm the fd by determining whether it should be EPOLLIN or EPOLLOUT. */
+    estate_t type;
     
     if(fd != listen_fd) {
-
         /* If the client has been terminated, then do not process anything. */
         if(client_fd_tuples[fd] == NULL) {
             return;
         }
 
-        client_t *client = client_fd_tuples[fd]; 
+        client_t *client = client_fd_tuples[fd];
 		
 		if(client -> state == unwritten) {
 			DTRACE("%ld:State of fd=%d is UNWRITTEN.\n", (long)getpid(), fd);
-			t_ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+            type = OUT;
 		} else {
-			//DTRACE("%ld:State of fd=%d is ESTABLISHED.\n", (long)getpid(), fd);
-			t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+            DTRACE("%ld:State of fd=%d is ESTABLISHED.\n", (long)getpid(), fd);
+            type = IN;
 		}
 	} else {
 		DTRACE("%ld:Rearming LISTENING fd=%d.\n", (long)getpid(), fd);
-		t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+        type = IN;
 	}
-    
-    t_ev.data.fd = fd;
 
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &t_ev) == -1) {
-        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+    if(rearm_fd(fd, epoll_fd, type)) {
+        perror("(handle_io) rearm_fd(): Failed to rearm the fd in epoll.");
         return;
     }
+}
+
+/** Rearms the fd with a specified epoll unit.
+ * 
+ * fd: The file descriptor for the socket which needs rearming.
+ * e_fd: The epoll fd which contains the fd that needs rearming.
+ * type: The way in which the fd should be modified. This will be either as 
+ * EPOLLIN or EPOLLOUT given as IN and OUT respectively of type estate_t.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
+int rearm_fd(int fd, int e_fd, estate_t type) {
+
+    DTRACE("%ld:Rearming the timer fd=%d on epoll_fd=%d.\n", (long)getpid(), fd, e_fd);
+    struct epoll_event ev;
+    if(type == IN) {
+        ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+    } else {
+        ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+    }
+    ev.data.fd = fd;
+
+    if(epoll_ctl(e_fd, EPOLL_CTL_MOD, fd, &ev) == -1) {
+        perror("(rearm_fd) epoll_ctl(): Failed to modify socket in epoll to rearm the fd with oneshot.");
+        return -1;
+    }
+
+    return 0;
 }
 
 /** Manages accepting a client and bootstrapping the client's registration with a server by initiating 
@@ -645,12 +676,8 @@ void handle_timer() {
     }
     
     DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
-    struct epoll_event t_ev;
-    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    t_ev.data.fd = t_epoll_fd;
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, t_epoll_fd, &t_ev) == -1) {
-        perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
+    if(rearm_fd(t_epoll_fd, epoll_fd, IN)) {
+        perror("(epoll_listener) rearm_fd(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
         return;
     }
 }
