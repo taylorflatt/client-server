@@ -172,7 +172,7 @@ int add_fd_to_epoll(int fd, int e_fd) {
     ev.data.fd = fd;
 
     if(epoll_ctl(e_fd, EPOLL_CTL_ADD, fd, &ev) == -1) {
-        perror("(listen_for_timers) epoll_ctl(): Failed to add socket to epoll.");
+        perror("(add_fd_to_epoll) epoll_ctl(): Failed to add socket to epoll.");
         return -1;
     }
 
@@ -395,11 +395,11 @@ int initiate_handshake(int client_fd) {
 
     /* Set non-blocking and close on exec. */
     if((timer_fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC)) == -1) {
-        perror("(handshake) timer_create(): Error creating handshake timer.");
+        perror("(initiate_handshake) timer_create(): Error creating handshake timer.");
     }
     
     if(timerfd_settime(timer_fd, 0, &timer, NULL) == -1) {
-		perror("(handshake) timerfd_settime(): Error setting handshake timer.");
+		perror("(initiate_handshake) timerfd_settime(): Error setting handshake timer.");
     }
     
     DTRACE("%ld:Starting timer with fd=%d.\n", (long)getpid(), timer_fd);
@@ -655,7 +655,7 @@ void handle_timer_event() {
         
         DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
         if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
-            perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
+            perror("(handle_timer_event) epoll_ctl(): Failed to delete the timer fd in epoll.");
         }
         
         close(timer_fd);
@@ -663,7 +663,7 @@ void handle_timer_event() {
     
     DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
     if(rearm_fd(t_epoll_fd, epoll_fd, IN)) {
-        perror("(epoll_listener) rearm_fd(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
+        perror("(handle_timer_event) rearm_fd(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
         return;
     }
 }
@@ -712,7 +712,7 @@ char *read_client_message(int client_fd)
         if (errno)
             perror("(read_client_message) read(): Error reading from the client socket");
         else
-            perror("read_client_message() read(): Client closed connection unexpectedly\n");
+            perror("(read_client_message) read(): Client closed connection unexpectedly\n");
             
         return NULL; 
     }
@@ -779,7 +779,7 @@ void handle_unwritten_data(int from, int to, client_t *client) {
 
     DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
     if((nwrite = write(to, client -> unwritten, client -> nunwritten)) == -1) {
-        perror("(transfer_data) write(): Failed writing partial write data.");
+        perror("(handle_unwritten_data) write(): Failed writing partial write data.");
     }
     
     DTRACE("%ld:Unwritten fd=%d, nwrite=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite);
@@ -819,7 +819,7 @@ void handle_normal_data(int from, int to, client_t *client) {
 
     if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
-        perror("(transfer_data) nread_errno: Failed reading data.");
+        perror("(handle_normal_data) nread_errno: Failed reading data.");
         graceful_exit(from);
     }
 
@@ -831,7 +831,7 @@ void handle_normal_data(int from, int to, client_t *client) {
     /* Display the write error before change the value of nwrite. */
     if(nwrite == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error write()'ing from FD %d\n", (long)getpid(), from);
-        perror("(transfer_data) nwrite_errno: Failed writing data.");
+        perror("(handle_normal_data) nwrite_errno: Failed writing data.");
     }
     
     /** Take corrective action in the event there was an error writing. The way in which 
@@ -900,14 +900,14 @@ void close_client(int client_fd) {
 
     /* Delete the client fd from epoll. */
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL) == -1) {
-        perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
+        perror("(close_client) epoll_ctl(): Failed to delete the client fd in epoll.");
     }
 
     /* Stop the IO on the client_fd, then close the client fd, and remove the client's reference in the struct. */
     if(shutdown(client_fd, SHUT_RDWR) == -1) {
         if(errno != ENOTCONN) {
             DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected.\n", (long)getpid());
-            perror("(graceful_exit) shutdown(): WARNING! Failed to stop IO on the client fd.");
+            perror("(close_client) shutdown(): WARNING! Failed to stop IO on the client fd.");
 		}
     }
 
@@ -933,12 +933,12 @@ void close_pty(int pty_fd) {
 
     DTRACE("%ld:Closing the pty_fd=%ld.\n", (long)getpid(), (long)pty_fd);
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
-        perror("(graceful_exit) epoll_ctl(): Failed to delete the pty_fd in epoll.");
+        perror("(close_pty) epoll_ctl(): Failed to delete the pty_fd in epoll.");
     }
 
     /* Close the pty fd and remove the pty's reference in the struct. */
     if(close(pty_fd) == -1) {
-        perror("(graceful_exit) close(): Failed to close the pty fd.");
+        perror("(close_pty) close(): Failed to close the pty fd.");
     } else {
         client_fd_tuples[pty_fd] = NULL;
     }
