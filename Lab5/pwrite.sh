@@ -1,7 +1,8 @@
 #!/bin/bash
 
 while true; do
-	cat server.c
+	cat client.c
 done
 
 exit
+

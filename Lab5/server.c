@@ -94,6 +94,8 @@ void handle_timer();
 int set_nonblocking_fd(int fd);
 char *read_client_message(int client_fd);
 void transfer_data(int from);
+void handle_unwritten_data(int from, int to, client_t *client);
+void handle_normal_data(int from, int to, client_t *client);
 void graceful_exit(int exit_status);
 void close_client(int client_fd);
 void close_pty(int pty_fd);
@@ -261,11 +263,11 @@ void handle_io(int fd) {
 			DTRACE("%ld:State of fd=%d is UNWRITTEN.\n", (long)getpid(), fd);
             type = OUT;
 		} else {
-            DTRACE("%ld:State of fd=%d is ESTABLISHED.\n", (long)getpid(), fd);
+            //DTRACE("%ld:State of fd=%d is ESTABLISHED.\n", (long)getpid(), fd);
             type = IN;
 		}
 	} else {
-		DTRACE("%ld:Rearming LISTENING fd=%d.\n", (long)getpid(), fd);
+		//DTRACE("%ld:Rearming LISTENING fd=%d.\n", (long)getpid(), fd);
         type = IN;
 	}
 
@@ -286,7 +288,7 @@ void handle_io(int fd) {
  */
 int rearm_fd(int fd, int e_fd, estate_t type) {
 
-    DTRACE("%ld:Rearming the timer fd=%d on epoll_fd=%d.\n", (long)getpid(), fd, e_fd);
+    //DTRACE("%ld:Rearming the fd=%d on epoll_fd=%d.\n", (long)getpid(), fd, e_fd);
     struct epoll_event ev;
     if(type == IN) {
         ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
@@ -409,7 +411,7 @@ int initiate_handshake(int client_fd) {
     timer_fd_tuples[timer_fd] = client_fd;
 
     if(add_fd_to_epoll(timer_fd, t_epoll_fd)) {
-        perror("(transfer_data) add_fd_to_epoll(): Failed to add a timer for a client to the timer epoll.");
+        perror("(initiate_handshake) add_fd_to_epoll(): Failed to add a timer for a client to the timer epoll.");
         return -1;
     }
 
@@ -597,8 +599,8 @@ void epoll_listener() {
     int i;
 
     while(1) {
-        events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
-        //events = epoll_wait(epoll_fd, ev_list, MAX_NUM_CLIENTS * 2, -1);
+        //events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
+        events = epoll_wait(epoll_fd, ev_list, MAX_NUM_CLIENTS * 2, -1);
 
         //DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getpid(), events, ev_list[0].data.fd);
 
@@ -731,9 +733,13 @@ char *read_client_message(int client_fd)
  * 
 */
 void transfer_data(int from) {
+
+    /* Check to make sure the client hasn't already been nulled so a segfault doesn't occur later when the client is accessed. */
+    if(client_fd_tuples[from] == NULL) {
+        DTRACE("%ld:Client fd=%d has already been closed. Not going to attempt to close again.\n", (long)getpid(), from);
+        return;
+    }
     
-    char buf[MAX_LENGTH];
-    ssize_t nread, nwrite;
     client_t *client = client_fd_tuples[from];
     int to;
 
@@ -744,75 +750,95 @@ void transfer_data(int from) {
         to = client -> pty_fd;
     }
 
+    /* Check to make sure the client hasn't already been nulled so a segfault doesn't occur later when the client is accessed. */
+    if(client_fd_tuples[to] == NULL) {
+        DTRACE("%ld:Client fd=%d has already been closed. Not going to attempt to close again.\n", (long)getpid(), from);
+        return;
+    }
+
     if(client -> state == terminated) {
         return;
     }
 
-    /* The client has unwritten data. */
     if(get_cstate(client -> socket_fd) == unwritten) {
-        DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
-        if((nwrite = write(to, client -> unwritten, client -> nunwritten)) == -1) {
-            perror("(transfer_data) write(): Failed writing partial write data.");
-        }
-        
-        DTRACE("%ld:Unwritten fd=%d, nwrite=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite);
-
-        // There is still data left in the buffer to write.
-        if(client -> nunwritten > nwrite) {
-			DTRACE("%ld:There is STILL unwritten data on fd=%d with nwrite=%d and nunwritten=%d.\n", (long)getpid(), from, (int)nwrite, (int)client -> nunwritten);
-            client -> nunwritten -= nwrite;
-
-            // Require memmove since the memory locations might overlap. This needs EXTENSIVE testing.
-            memmove(client -> unwritten, client -> unwritten + nwrite, client -> nunwritten);
-
-        } else {
-			DTRACE("%ld:Unwritten data has been completely written for fd=%d.\n", (long)getpid(), from);
-            client -> nunwritten = 0;
-            client -> state = established;
-        }
+        handle_unwritten_data(from, to, client);
     } else {
-        if((nread = read(from, buf, MAX_LENGTH)) > 0) {
-            nwrite = write(to, buf, nread);
-        }
-
-        if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-            DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
-            perror("(transfer_data) nread_errno: Failed reading data.");
-            graceful_exit(from);
-        }
-
-        if(nread == 0) {
-            DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
-            graceful_exit(from);
-        }
-        
-        if(nwrite == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
-			DTRACE("%ld:Error write()'ing from FD %d\n", (long)getpid(), from);
-            perror("(transfer_data) nwrite_errno: Failed writing data.");
-            graceful_exit(from);
-		}
-		
-        /** Take corrective action in the event there was an error writing. The way in which 
-         * nunwritten is calculated, if nothing was written, then nwrite must be 0 otherwise 
-         * data loss will occur.
-         */
-		if(nwrite == -1) {
-			nwrite = 0;
-		}
-
-        /* There is a partial write. Store the unwritten data in the client buffer and change state. */
-        if(nwrite < nread) {
-			DTRACE("\n\n\n");
-			DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), from, (int)nwrite, (int)nread);
-			DTRACE("\n\n\n");
-			
-            client -> nunwritten = nread - nwrite;
-            memcpy(client -> unwritten, buf + nwrite, client -> nunwritten);
-            client -> state = unwritten;
-        }
+        handle_normal_data(from, to, client);
     }
 
     return;
+}
+
+void handle_unwritten_data(int from, int to, client_t *client) {
+
+    ssize_t nwrite;
+
+    DTRACE("%ld:There is unwritten data on fd=%d with nunwritten=%d.\n", (long)getpid(), from, (int)client -> nunwritten);
+    if((nwrite = write(to, client -> unwritten, client -> nunwritten)) == -1) {
+        perror("(transfer_data) write(): Failed writing partial write data.");
+    }
+    
+    DTRACE("%ld:Unwritten fd=%d, nwrite=%d.\n", (long)getpid(), client -> socket_fd, (int)nwrite);
+
+    // There is still data left in the buffer to write.
+    if(client -> nunwritten > nwrite) {
+        DTRACE("%ld:There is STILL unwritten data on fd=%d with nwrite=%d and nunwritten=%d.\n", (long)getpid(), from, (int)nwrite, (int)client -> nunwritten);
+        client -> nunwritten -= nwrite;
+
+        // Require memmove since the memory locations might overlap. This needs EXTENSIVE testing.
+        memmove(client -> unwritten, client -> unwritten + nwrite, client -> nunwritten);
+
+    } else {
+        DTRACE("%ld:Unwritten data has been completely written for fd=%d.\n", (long)getpid(), from);
+        client -> nunwritten = 0;
+        client -> state = established;
+    }
+}
+
+void handle_normal_data(int from, int to, client_t *client) {
+
+    char buf[MAX_LENGTH];
+    ssize_t nread, nwrite;
+
+    if((nread = read(from, buf, MAX_LENGTH)) > 0) {
+        nwrite = write(to, buf, nread);
+    }
+
+    if(nread == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+        DTRACE("%ld:Error read()'ing from FD %d\n", (long)getpid(), from);
+        perror("(transfer_data) nread_errno: Failed reading data.");
+        graceful_exit(from);
+    }
+
+    if(nread == 0) {
+        DTRACE("%ld:NREAD=0 The socket was closed.\n", (long)getpid());
+        graceful_exit(from);
+    }
+    
+    if(nwrite == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
+        DTRACE("%ld:Error write()'ing from FD %d\n", (long)getpid(), from);
+        perror("(transfer_data) nwrite_errno: Failed writing data.");
+        //graceful_exit(from);
+    }
+    
+    /** Take corrective action in the event there was an error writing. The way in which 
+     * nunwritten is calculated, if nothing was written, then nwrite must be 0 otherwise 
+     * data loss will occur.
+     */
+    if(nwrite == -1) {
+        nwrite = 0;
+    }
+
+    /* There is a partial write. Store the unwritten data in the client buffer and change state. */
+    if(nwrite < nread) {
+        DTRACE("\n\n\n");
+        DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), from, (int)nwrite, (int)nread);
+        DTRACE("\n\n\n");
+        
+        client -> nunwritten = nread - nwrite;
+        memmove(client -> unwritten, buf + nwrite, client -> nunwritten);
+        client -> state = unwritten;
+    }
 }
 
 /** Called in order to close file descriptors when the client is finished.
