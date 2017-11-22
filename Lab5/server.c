@@ -79,7 +79,7 @@ typedef struct client {
 
 /* Prototypes. */
 int create_server();
-int listen_for_timers();
+int add_fd_to_epoll(int fd, int e_fd);
 void handle_io(int fd);
 int rearm_fd(int fd, int e_fd, estate_t type);
 void client_connect();
@@ -131,8 +131,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* Adds the timer epoll fd onto the main epoll so that timer events can be caught and handled. */
-    if((listen_for_timers()) == -1) {
-        perror("(Main) listen_for_timers(): Error adding the timer fd to the main epoll.");
+    if(add_fd_to_epoll(t_epoll_fd, epoll_fd)) {
+        perror("(Main) add_fd_to_epoll(): Error adding the timer fd to the main epoll.");
         exit(EXIT_FAILURE);
     }
 
@@ -153,21 +153,23 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
 }
 
-/** Adds the timer epoll fd to the main epoll so that all events are captured by the 
- * main epoll loop.
+/** Adds the specified fd to an epoll unit with edge-triggered, EPOLLIN, and oneshot.
+ * 
+ * fd: A file descriptor to be added to epoll.
+ * e_fd: The epoll unit to which the fd will be added.
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
  */
-int listen_for_timers() {
+int add_fd_to_epoll(int fd, int e_fd) {
+
+    DTRACE("%ld:Adding fd=%d to epoll=%d.\n", (long)getpid(), fd, e_fd);
 
     /* Setup epoll for connection listener. */
     struct epoll_event ev;
     ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
-    ev.data.fd = t_epoll_fd;
+    ev.data.fd = fd;
 
-    DTRACE("%ld:Setting epoll timerfd=%d.\n", (long)getpid(), t_epoll_fd);
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, t_epoll_fd, &ev) == -1) {
+    if(epoll_ctl(e_fd, EPOLL_CTL_ADD, fd, &ev) == -1) {
         perror("(listen_for_timers) epoll_ctl(): Failed to add socket to epoll.");
         return -1;
     }
@@ -214,12 +216,8 @@ int create_server() {
     }
 
     /* Setup epoll for connection listener. */
-    struct epoll_event ev;
-    ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
-    ev.data.fd = listen_fd;
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev) == -1) {
-        perror("(create_server) epoll_ctl(): Failed to add socket to epoll.");
+    if(add_fd_to_epoll(listen_fd, epoll_fd)) {
+        perror("(create_server) add_fd_to_epoll(): Failed to add listening_fd to epoll.");
         return -1;
     }
 
@@ -357,7 +355,6 @@ int register_client(int sock) {
 
     DTRACE("%ld:Begun registering CLIENT=%d.\n", (long)getpid(), sock);
 
-    struct epoll_event ev;
     client_t *client = &client_fd_tuples_mem[sock];
     client -> socket_fd = sock;
     client -> state = new;              /* Set the client state to new for timer/shutdown purposes. */
@@ -366,11 +363,8 @@ int register_client(int sock) {
 
     client_fd_tuples[sock] = client;    /* Add the client object to the array. */
 
-    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    ev.data.fd = sock;
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock, &ev) == -1) {
-        perror("(register_client) epoll_ctl(): Failed to add socket to epoll.");
+    if(add_fd_to_epoll(sock, epoll_fd)) {
+        perror("(register_client) add_fd_to_epoll(): Failed to add client_fd to epoll.");
         return -1;
     }
 
@@ -413,14 +407,9 @@ int initiate_handshake(int client_fd) {
 
     /* Store the client fd in an array that is indexed by the timer fd so it can be found in the epoll loop. */
     timer_fd_tuples[timer_fd] = client_fd;
-	
-	struct epoll_event t_ev;
-    t_ev.events = EPOLLONESHOT | EPOLLIN | EPOLLET;
-    t_ev.data.fd = timer_fd;
-    
-    /* Add the timer to the timer epoll. */
-	if(epoll_ctl(t_epoll_fd, EPOLL_CTL_ADD, timer_fd, &t_ev) == -1) {
-        perror("(transfer_data) epoll_ctl(): Failed to modify socket in epoll to rearm with oneshot.");
+
+    if(add_fd_to_epoll(timer_fd, t_epoll_fd)) {
+        perror("(transfer_data) add_fd_to_epoll(): Failed to add a timer for a client to the timer epoll.");
         return -1;
     }
 
@@ -465,9 +454,8 @@ int validate_client(int client_fd) {
 */
 int open_pty(int client_fd) {
     
-    char * pty_slave;
+    char *pty_slave;
     int pty_master, err;
-    struct epoll_event ev;
     client_t *client = client_fd_tuples[client_fd];
 
     DTRACE("%ld:Opening PTY for CLIENT=%d.\n", (long)getpid(), client_fd);  
@@ -514,11 +502,8 @@ int open_pty(int client_fd) {
     }
 
     /* Add the pty master to epoll with oneshot and edge-triggered enabled. */
-    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-    ev.data.fd = pty_master;
-
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty_master, &ev) == -1) {
-        perror("(open_pty) epoll_ctl(): Failed to add PTY to epoll.");
+    if(add_fd_to_epoll(pty_master, epoll_fd)) {
+        perror("(open_pty) epoll_ctl(): Failed to add the pty_fd to the main epoll.");
         return -1;
     }
 
