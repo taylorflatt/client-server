@@ -290,24 +290,20 @@ void client_connect() {
         return;
     }
 
-    //
-    //
-    //
-    //
-    // What if we have too many clients on our server for our client_fd_tuples?
-    //
-    //
-    //
-    //
+    if(client_fd >= MAX_NUM_CLIENTS * 2 + 5) {
+        perror("(client_connect): The max number of clients for the server has been reached. Client is unable to register with the server.");
+        close(client_fd);
+        return;
+    }
 
     if(register_client(client_fd)) {
         perror("(client_connect) register_client(): Failed to register the client with the server.");
-        close(client_fd);
+        graceful_exit(client_fd);
     }
 
     if(initiate_handshake(client_fd)) {
         perror("(client_connect) initiate_handshake(): Failed to initiate the handshake with the client.");
-        close(client_fd);
+        graceful_exit(client_fd);
     }
 }
 
@@ -818,7 +814,7 @@ void graceful_exit(int fd) {
     /* Close the client fd and remove the client's reference in the struct. */
     if(shutdown(client_fd, SHUT_RDWR) == -1) {
         if(errno == ENOTCONN) {
-			DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected. Attempting close().\n", (long)getpid());
+			DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected. Attempting close() instead.\n", (long)getpid());
 			close(client_fd);
 		} else {
 			perror("(graceful_exit) shutdown(): WARNING! Failed to stop the client fd from RDWR.");
