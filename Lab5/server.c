@@ -90,8 +90,8 @@ int validate_client(int client_fd);
 int open_pty(int client_fd);
 int create_bash_process(char *pty_slave);
 void epoll_listener();
-void handle_timer();
-int set_nonblocking_fd(int fd);
+void handle_timer_event();
+int set_fd_to_nonblocking(int fd);
 char *read_client_message(int client_fd);
 void transfer_data(int from);
 void handle_unwritten_data(int from, int to, client_t *client);
@@ -213,8 +213,8 @@ int create_server() {
         return -1;
     }
 
-    if(set_nonblocking_fd(listen_fd) == -1) {
-        perror("(create_server) set_nonblocking_fd(): Error setting listen_fd to non-blocking.");
+    if(set_fd_to_nonblocking(listen_fd) == -1) {
+        perror("(create_server) set_fd_to_nonblocking(): Error setting listen_fd to non-blocking.");
     }
 
     /* Setup epoll for connection listener. */
@@ -499,8 +499,8 @@ int open_pty(int client_fd) {
     strcpy(pty_slave, ptsname(pty_master));
 
     /* Set the pty and client sockets to non-blocking mode. */
-    if((set_nonblocking_fd(pty_master) == -1) || (set_nonblocking_fd(client_fd) == -1)) {
-        perror("(open_pty) set_nonblocking_fd(): Error setting client to non-blocking.");
+    if((set_fd_to_nonblocking(pty_master) == -1) || (set_fd_to_nonblocking(client_fd) == -1)) {
+        perror("(open_pty) set_fd_to_nonblocking(): Error setting client to non-blocking.");
     }
 
     /* Add the pty master to epoll with oneshot and edge-triggered enabled. */
@@ -595,8 +595,7 @@ int create_bash_process(char *pty_slave) {
 void epoll_listener() {
 
     struct epoll_event ev_list[MAX_EVENTS];
-    int events;
-    int i;
+    int events, i;
 
     while(1) {
         //events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
@@ -609,7 +608,7 @@ void epoll_listener() {
             if(ev_list[i].events & (EPOLLIN | EPOLLOUT)) {
                 /* If the event is a timer, process it. Otherwise transfer data. */
                 if((ev_list[i].data.fd == t_epoll_fd) & EPOLLIN) { 
-                    handle_timer();
+                    handle_timer_event();
                 } else {
                     //DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
                     tpool_add_task(ev_list[i].data.fd);
@@ -636,7 +635,7 @@ void epoll_listener() {
  * 
  * Returns: None.
  */
-void handle_timer() {
+void handle_timer_event() {
 
     struct epoll_event t_ev_list[MAX_EVENTS];
     int t_events, timer_fd, client_fd, i;
@@ -675,13 +674,13 @@ void handle_timer() {
  * 
  * Returns: An integer corresponding to the success 0, or failure -1.
  */
-int set_nonblocking_fd(int fd) {
+int set_fd_to_nonblocking(int fd) {
     
     int fd_flags;
 
     /* Get the current fd's flags. */
     if((fd_flags = fcntl(fd, F_GETFL, 0)) == -1) {
-        perror("(set_nonblocking_fd) fcntl(): Error getting fd_flags.");
+        perror("(set_fd_to_nonblocking) fcntl(): Error getting fd_flags.");
         return -1;
     }
 
@@ -690,7 +689,7 @@ int set_nonblocking_fd(int fd) {
 
     /* Overwrite the fd's flags. */
     if(fcntl(fd, F_SETFL, fd_flags) == -1) {
-        perror("(set_nonblocking_fd) fcntl(): Error setting fd_flags.");
+        perror("(set_fd_to_nonblocking) fcntl(): Error setting fd_flags.");
         return -1;
     }
 
@@ -723,14 +722,11 @@ char *read_client_message(int client_fd)
   return msg;
 }
 
-/** Reads and writes data from a socket to a socket which is associated to a client. It also handles 
- * partial writes. The destination fd is determined by the client object.
- * 
- * Remarks: Need to check for both since either can be set...
- * EWOULDBLOCK/EAGAIN: If a read is going to block.
+/** Delegates the I/O for clients dependent on the state of the data and where its destination.
  * 
  * from: Integer representing the source file descriptor (read).
  * 
+ * Returns: None. 
 */
 void transfer_data(int from) {
 
@@ -769,6 +765,14 @@ void transfer_data(int from) {
     return;
 }
 
+/** Handles writing from the client's stored buffer to the client for a partial write. 
+ * 
+ * from: The file descriptor representing the source of the data. 
+ * to: The file descriptor representing the end-point of the data.
+ * client: A pointer to the client object.
+ * 
+ * Returns: None.
+*/
 void handle_unwritten_data(int from, int to, client_t *client) {
 
     ssize_t nwrite;
@@ -795,6 +799,15 @@ void handle_unwritten_data(int from, int to, client_t *client) {
     }
 }
 
+/** Handles reading/writing from a fd to another fd without partial writes. If a partial write 
+ * is detected, then the unwritten data is stored to the client object for later processing.
+ * 
+ * from: The file descriptor representing the source of the data. 
+ * to: The file descriptor representing the end-point of the data.
+ * client: A pointer to the client object.
+ * 
+ * Returns: None.
+*/
 void handle_normal_data(int from, int to, client_t *client) {
 
     char buf[MAX_LENGTH];
@@ -815,10 +828,10 @@ void handle_normal_data(int from, int to, client_t *client) {
         graceful_exit(from);
     }
     
+    /* Display the write error before change the value of nwrite. */
     if(nwrite == -1 && errno != EWOULDBLOCK && errno != EAGAIN) {
         DTRACE("%ld:Error write()'ing from FD %d\n", (long)getpid(), from);
         perror("(transfer_data) nwrite_errno: Failed writing data.");
-        //graceful_exit(from);
     }
     
     /** Take corrective action in the event there was an error writing. The way in which 
