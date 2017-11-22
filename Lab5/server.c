@@ -84,10 +84,13 @@ int validate_client(int client_fd);
 int open_pty(int client_fd);
 int create_bash_process(char *pty_slave);
 void epoll_listener();
+void handle_timer();
 int set_nonblocking_fd(int fd);
 char *read_client_message(int client_fd);
 void transfer_data(int from);
 void graceful_exit(int exit_status);
+void close_client(int client_fd);
+void close_pty(int pty_fd);
 
 /* Global Variables */
 /* A map to store the clients. */
@@ -286,7 +289,7 @@ void client_connect() {
     }
 
     if(client_fd == -1) {
-        perror("STOP");
+        perror("(client_connect): Invalid client_fd = -1 has been discovered. Failed to client accept.");
         return;
     }
 
@@ -326,11 +329,11 @@ int register_client(int sock) {
     struct epoll_event ev;
     client_t *client = &client_fd_tuples_mem[sock];
     client -> socket_fd = sock;
-    client -> state = new;
-    client -> pty_fd = -1;      /* No pty created for the client yet. */
-    client -> nunwritten = 0;   /* No unwritten data in its buffer yet. */
+    client -> state = new;              /* Set the client state to new for timer/shutdown purposes. */
+    client -> pty_fd = -1;              /* No pty created for the client yet. */
+    client -> nunwritten = 0;           /* No unwritten data in its buffer yet. */
 
-    client_fd_tuples[sock] = client;
+    client_fd_tuples[sock] = client;    /* Add the client object to the array. */
 
     ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
     ev.data.fd = sock;
@@ -417,7 +420,6 @@ int validate_client(int client_fd) {
     }
 
     /* Set the client to a validated state so when the timer expires, they are not cleaned up. */
-    //client_t *client = client_fd_tuples[client_fd];
     client_fd_tuples[client_fd] -> state = validated;
 
     return 0;
@@ -458,7 +460,8 @@ int open_pty(int client_fd) {
      * Grantpt = Creates a child process that executes a set-user-ID-root
      *          program changing ownership of the slave to be the same as  
      *          the effective user ID of the calling process and changes 
-     *          permissions so the owner has R/W permissions.
+     *          permissions so the owner has R/W permissions. Not required 
+     *          on Linux.
      * Unlockpt = Removes the internal lock placed on the slave corresponding 
      *          to the pty. (This must be after grantpt).
      * ptsname = Returns the name of the pty slave corresponding to the pty 
@@ -557,7 +560,7 @@ int create_bash_process(char *pty_slave) {
         exit(EXIT_FAILURE); 
     }
 
-    close(pty_slave_fd);
+    close(pty_slave_fd);    /* No longer needed in bash. */
     free(pty_slave);
     execlp("bash", "bash", NULL);
 
@@ -569,15 +572,13 @@ int create_bash_process(char *pty_slave) {
 /** An epoll listener which handles communication between the client and server by 
  * waiting for read/write events to come through on available file descriptors.
  * 
- * ignore: A pointer which is a required argument. It is not used.
- * 
  * Returns: None.
 */
 void epoll_listener() {
 
-    struct epoll_event ev_list[MAX_EVENTS], t_ev_list[MAX_EVENTS];
-    int events, t_events, timer_fd, client_fd;
-    int i, j;
+    struct epoll_event ev_list[MAX_EVENTS];
+    int events;
+    int i;
 
     while(1) {
         events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
@@ -590,38 +591,7 @@ void epoll_listener() {
             if(ev_list[i].events & (EPOLLIN | EPOLLOUT)) {
                 /* If the event is a timer, process it. Otherwise transfer data. */
                 if((ev_list[i].data.fd == t_epoll_fd) & EPOLLIN) { 
-					t_events = epoll_pwait(t_epoll_fd, t_ev_list, MAX_EVENTS, -1, 0);
-                    
-                    /* Process the elapsed timers. */
-					for(j = 0; j < t_events; j++) {
-                        timer_fd = t_ev_list[j].data.fd;
-                        client_fd = timer_fd_tuples[timer_fd];
-
-                        /* If there is a timer event and it is a new client, then we need to release the client. */
-                        if(client_fd_tuples[client_fd] && client_fd_tuples[client_fd] -> state == new) {
-                            DTRACE("%ld:A timer has expired on t_epoll_fd=%d with timer_fd=%d for client=%d.\n", (long)getpid(), t_epoll_fd, t_ev_list[j].data.fd, client_fd);   
-
-                            graceful_exit(client_fd);
-                        }
-                        
-						DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
-						if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
-							perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
-						}
-                        
-                        close(timer_fd);
-                    }
-                    
-                    DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
-                    struct epoll_event t_ev;
-                    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-                    t_ev.data.fd = t_epoll_fd;
-
-                    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, t_epoll_fd, &t_ev) == -1) {
-                        perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
-                        return;
-                    }
-
+                    handle_timer();
                 } else {
                     //DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
                     tpool_add_task(ev_list[i].data.fd);
@@ -640,6 +610,48 @@ void epoll_listener() {
                 exit(EXIT_FAILURE);
             }
         }
+    }
+}
+
+/** A timer epoll listener which handles timers for connecting clients and proceeds 
+ * to close clients whose timer exceeds the allotted time.
+ * 
+ * Returns: None.
+ */
+void handle_timer() {
+
+    struct epoll_event t_ev_list[MAX_EVENTS];
+    int t_events, timer_fd, client_fd, i;
+
+    t_events = epoll_pwait(t_epoll_fd, t_ev_list, MAX_EVENTS, -1, 0);
+    
+    /* Process the elapsed timers. */
+    for(i = 0; i < t_events; i++) {
+        timer_fd = t_ev_list[i].data.fd;
+        client_fd = timer_fd_tuples[timer_fd];
+
+        /* If there is a timer event and it is a new client, then we need to release the client. */
+        if(client_fd_tuples[client_fd] && client_fd_tuples[client_fd] -> state == new) {
+            DTRACE("%ld:A timer has expired on t_epoll_fd=%d with timer_fd=%d for client=%d.\n", (long)getpid(), t_epoll_fd, t_ev_list[i].data.fd, client_fd);   
+            graceful_exit(client_fd);
+        }
+        
+        DTRACE("%ld:Closing timer fd=%d.\n", (long)getpid(), timer_fd);
+        if(epoll_ctl(t_epoll_fd, EPOLL_CTL_DEL, timer_fd, NULL) == -1) {
+            perror("(epoll_listener) epoll_ctl(): Failed to delete the timer fd in epoll.");
+        }
+        
+        close(timer_fd);
+    }
+    
+    DTRACE("%ld:Rearming the timer fd=%d.\n", (long)getpid(), t_epoll_fd);
+    struct epoll_event t_ev;
+    t_ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+    t_ev.data.fd = t_epoll_fd;
+
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, t_epoll_fd, &t_ev) == -1) {
+        perror("(epoll_listener) epoll_ctl(): Failed to modify socket in epoll to rearm the timer fd with oneshot.");
+        return;
     }
 }
 
@@ -768,15 +780,19 @@ void transfer_data(int from) {
             graceful_exit(from);
 		}
 		
+        /** Take corrective action in the event there was an error writing. The way in which 
+         * nunwritten is calculated, if nothing was written, then nwrite must be 0 otherwise 
+         * data loss will occur.
+         */
 		if(nwrite == -1) {
 			nwrite = 0;
 		}
 
         /* There is a partial write. Store the unwritten data in the client buffer and change state. */
         if(nwrite < nread) {
-			DTRACE("\n\n\n\n\n\n\n");
+			DTRACE("\n\n\n");
 			DTRACE("%ld:WARN! Unwritten on fd=%d with nwrite=%d and nread=%d.\n", (long)getpid(), from, (int)nwrite, (int)nread);
-			DTRACE("\n\n\n\n\n\n\n");
+			DTRACE("\n\n\n");
 			
             client -> nunwritten = nread - nwrite;
             memcpy(client -> unwritten, buf + nwrite, client -> nunwritten);
@@ -797,32 +813,20 @@ void graceful_exit(int fd) {
 
     DTRACE("%ld:Started exit procedure.\n", (long)getpid());
 
+    /* Check to make sure the client hasn't already been nulled so a segfault doesn't occur later when the client is accessed. */
     if(client_fd_tuples[fd] == NULL) {
-        DTRACE("%ld:ERROR!!!!.\n", (long)getpid());
+        DTRACE("%ld:Client has already been closed. Not going to attempt to close again.\n", (long)getpid());
         return;
     }
 
+    /* Get the client data so that the channels may be closed. */
     client_t *client = client_fd_tuples[fd];
-    int client_fd = client -> socket_fd;    
+    int client_fd = client -> socket_fd;
+    int pty_fd = client -> pty_fd;
 
-    DTRACE("%ld:Closing the client_fd=%ld.\n", (long)getpid(), (long)client_fd);
-    /* Delete the client fd from epoll. */
-    if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL) == -1) {
-        perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
-    }
+    /* If the client is new, then simply skip closing the pty since one was never setup. Otherwise, close it. */
+    close_client(client_fd);
 
-    /* Close the client fd and remove the client's reference in the struct. */
-    if(shutdown(client_fd, SHUT_RDWR) == -1) {
-        if(errno == ENOTCONN) {
-			DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected. Attempting close() instead.\n", (long)getpid());
-			close(client_fd);
-		} else {
-			perror("(graceful_exit) shutdown(): WARNING! Failed to stop the client fd from RDWR.");
-		}
-    }
-	
-    client_fd_tuples[client_fd] = NULL;
-        
     /* If we haven't completed client setup we don't have a pty to close. Just return. */
     if(client -> state == new) {
         return;
@@ -830,7 +834,51 @@ void graceful_exit(int fd) {
     
     client -> state = terminated;
 
-    int pty_fd = client -> pty_fd;
+    close_pty(pty_fd);
+}
+
+/** Called in order to close file descriptors when the client is finished.
+ * 
+ * client_fd: An integer representing the file descriptor that will be closed.
+ * 
+ * Returns: None
+*/
+void close_client(int client_fd) {
+
+    DTRACE("%ld:Closing the client_fd=%ld.\n", (long)getpid(), (long)client_fd);
+
+    /* Delete the client fd from epoll. */
+    if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL) == -1) {
+        perror("(graceful_exit) epoll_ctl(): Failed to delete the client fd in epoll.");
+    }
+
+    /* Stop the IO on the client_fd, then close the client fd, and remove the client's reference in the struct. */
+    if(shutdown(client_fd, SHUT_RDWR) == -1) {
+        if(errno != ENOTCONN) {
+            DTRACE("%ld:Failed shutdown() on the client due to the transport end being disconnected.\n", (long)getpid());
+            perror("(graceful_exit) shutdown(): WARNING! Failed to stop IO on the client fd.");
+		}
+    }
+
+    /* Close the client_fd. */
+    close(client_fd);
+	
+    /* Remove the client object from memory. */
+    client_fd_tuples[client_fd] = NULL;
+}
+
+/** Called in order to close file descriptors when the client is finished.
+ * 
+ * pty_fd: An integer representing the file descriptor that will be closed.
+ * 
+ * Returns: None.
+*/
+void close_pty(int pty_fd) {
+
+    if(pty_fd < 1) {
+        perror("(close_pty): The pty_fd is an invalid file descriptor. Not attemtping closure.");
+        return;
+    }
 
     DTRACE("%ld:Closing the pty_fd=%ld.\n", (long)getpid(), (long)pty_fd);
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pty_fd, NULL) == -1) {
@@ -843,4 +891,5 @@ void graceful_exit(int fd) {
     } else {
         client_fd_tuples[pty_fd] = NULL;
     }
+
 }
