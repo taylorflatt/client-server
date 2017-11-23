@@ -21,12 +21,16 @@
 #define PROCEED "<ok>\n"
 
 //Prototypes
-void close_socket(int connect_fd);
-char *read_server_message(int server_fd);
-int create_tty(int fd, struct termios *prev_pty);
+int connect_server(const char *server_ip);
+int handshake(int server_fd);
+char *read_handshake_messages(int client_fd);
+int set_tty_noncanon_noecho();
+int create_child_handler_signal();
+void communicate_with_server(int server_fd);
 int transfer_data(int from, int to);
 void sigchld_handler(int signal);
-void stop(int socket, int exit_status);
+void graceful_exit();
+void restore_tty_settings();
 
 struct termios saved_tty_settings;
 
@@ -34,9 +38,7 @@ pid_t cpid;
 
 int main(int argc, char *argv[]){
     int server_fd;
-    struct sockaddr_in serv_address;
     char ip[MAX_LENGTH];
-    char *handshake;
 
     // Check command-line arguments and store ip.
     if(argc != 2) {
@@ -47,133 +49,238 @@ int main(int argc, char *argv[]){
         strcpy(ip, argv[1]);
     }
 
-    // Create client socket.
-    if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
+    DTRACE("Client starting: PID=%ld, PGID=%ld, SID=%ld\n", (long)getpid(), (long)getpgrp(), (long)getsid(0));
+
+    if((server_fd = connect_server(ip)) == -1) {
+        perror("(main) connect_server(): Failed to connect to server.");
         exit(EXIT_FAILURE);
     }
 
-    // Name the socket, as agreed with the server.
+    /* Set SIGPIPE to ignored so that a write to a closed 
+     * connection causes an error return rather than a SIGPIPE termination. 
+     */
+    signal(SIGPIPE, SIG_IGN);
+    
+    if(handshake(server_fd) == -1) {
+        perror("(main) handshake(): Failed handshake with the server.");
+        exit(EXIT_FAILURE);
+    }
+
+    if(set_tty_noncanon_noecho() == -1) {
+        perror("(main) set_tty_noncanon_noecho(): Failed setting client's terminal settings.");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Make sure our children don't become brain sucking zombies. */
+    if(create_child_handler_signal() == -1) {
+        perror("(main) create_child_handler_signal(): Error creating signal to handle zombie children.");
+        graceful_exit(EXIT_FAILURE);
+    }
+
+    communicate_with_server(server_fd);
+
+    /* Normal termination. */
+    DTRACE("%ld:Client termination...\n", (long)getpid());
+    if (errno) {
+        graceful_exit(EXIT_FAILURE);
+    }
+
+    graceful_exit(EXIT_SUCCESS);
+
+    return 0;
+}
+
+int connect_server(const char *server_ip) {
+
+    int server_fd;
+    struct sockaddr_in serv_address;
+
+    if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("(connect_server) socket(): Failed setting the server's socket.");
+        return -1;
+    }
+
+    /* Name the socket and set the port. */
     serv_address.sin_family = AF_INET;
     serv_address.sin_port = htons(PORT);
-    inet_aton(ip, &serv_address.sin_addr);
+    inet_aton(server_ip, &serv_address.sin_addr);
 
-    // Connect the client and server sockets.
+    /* Connect the client and server. */
     if((connect(server_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
-        fprintf(stderr, "Error connecting to server, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    
-    // Receive the challenge.
-    if((handshake = read_server_message(server_fd)) == NULL) {
-        exit(EXIT_FAILURE);
+        perror("(connect_server) connect(): Failed connecting to the server.");
+        return -1;
     }
 
-    //  Verify the challenge against known result.
-    if(strcmp(handshake, CHALLENGE) != 0) {
-        fprintf(stderr, "Error receving challenge from server, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
+    return server_fd;
+}
+
+int handshake(int server_fd) {
+    char *h_msg;
+
+    /* Receive the challenge. */
+    if((h_msg = read_handshake_messages(server_fd)) == NULL) {
+        perror("(handshake) read_handshake_messages(): Failed reading the challenge from the server.");
+        return -1;
     }
 
-    // Send secret to the server for verification.
+    /* Verify the challenge against our known result. */
+    if(strcmp(h_msg, CHALLENGE) != 0) {
+        perror("(handshake) strcmp(): Incorrect challenge received from the server");
+        return -1;
+    }
+
+    /* Send SECRET to the server for verification. */
     if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
-        fprintf(stderr, "Error sending secret to server, error: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
+        perror("(handshake) write(): Failed sending the secret to the server.");
+        return -1;
     }
 
-    // Receive server verification.
-    if((handshake = read_server_message(server_fd)) == NULL) {
-        exit(EXIT_FAILURE);
+    /* Receive the server's verification message. */
+    if((h_msg = read_handshake_messages(server_fd)) == NULL) {
+        perror("(handshake) read_handshake_messages(): Failed to receive the server's PROCEED message.");
+        return -1;
     }
 
-    // Receive the final verification from the server to proceed.
-    if(strcmp(handshake, PROCEED) != 0) {
-        printf("%s", handshake);
-        exit(EXIT_FAILURE);    
+    /* Verify the server's response to our known result. */
+    if(strcmp(h_msg, PROCEED) != 0) {
+        perror("(handshake) strcmp(): The server's PROCEED message is invalid.");
+        return -1;
     }
 
-    // Signal handler. Make sure our children don't become brain sucking zombies.
+    return 0;
+}
+
+/** Reads the handshake messages.
+ * 
+ * client_fd: An integer corresponding to the clients's file descriptor.
+ * 
+ * Returns: A null terminated string if successful, otherwise NULL if an error is
+ *          encountered.
+*/
+char *read_handshake_messages(int client_fd)
+{
+  static char msg[MAX_LENGTH];
+  int nread;
+  
+    if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
+        if (errno)
+            perror("(read_handshake_messages) read(): Error reading from the client socket.");
+        else
+            perror("(read_handshake_messages) read(): Client closed connection unexpectedly.");
+            
+        return NULL; 
+    }
+
+  msg[nread] = '\0';
+
+  return msg;
+}
+
+
+/** Sets the bash terminal to non-canonical and non-echo mode.
+ * 
+ * Remarks: This is important so that signals aren't displayed to the 
+ *          client when they hit backspace and for programs such as 
+ *          top/vi to work.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
+int set_tty_noncanon_noecho()
+{
+    DTRACE("%ld:Setting terminal to non-canon mode.\n", (long)getpid());
+    struct termios tty_settings;
+
+    // Get the current terminal settings.
+    if (tcgetattr(STDIN_FILENO, &tty_settings) == -1) {
+        perror("(set_tty_noncanon_noecho) tcgetattr(): Getting TTY attributes failed");
+        return -1;
+    }
+
+    /* Save terminal settings so they can be restored later. */
+    saved_tty_settings = tty_settings;
+
+    /* Set terminal settings appropriately. */
+    tty_settings.c_lflag &= ~(ICANON | ECHO);   /* Sets terminal to non-canonical mode. */
+    tty_settings.c_lflag |= ISIG;               /* Does not echo back input (exit exit). */
+    tty_settings.c_lflag &= ~ICRNL;             /* Allows signals to be generated when detected. */
+    tty_settings.c_cc[VMIN] = 1;                /* Minimum number of characters for noncanonical reads. */
+    tty_settings.c_cc[VTIME] = 0;               /* Timeout in deciseconds for noncanonical reads. */
+
+    /* Put terminal in raw mode after flushing. */
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
+        perror("(set_tty_noncanon_noecho) tcsetattr(): Setting TTY attributes failed");
+        return -1;
+    }
+
+    return 0;
+}
+
+/** Creates a signal handler to detect when a subprocess exits.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
+int create_child_handler_signal() {
+    
+    DTRACE("%ld:Creating child termination signal handler.\n", (long)getpid());
     struct sigaction act;
-    act.sa_handler = sigchld_handler;
+    act.sa_handler = &sigchld_handler;
     act.sa_flags = 0;
     sigemptyset(&act.sa_mask);
 
     if(sigaction(SIGCHLD, &act, NULL) == -1) {
-        perror("Creation of the signal handler failed!");
-        exit(1);
-    }
-
-    // Setup the terminal for the client.
-    struct termios prev_pty;
-    if(create_tty(1, &prev_pty) == -1) {
-        tcsetattr(1, TCSAFLUSH, &prev_pty);
-        close(server_fd);
-        perror("Tcsetattr failed.");
-    }
-
-    // TODO: Swap over to the server method of writing so I'm not using memset.
-    // Create a child process.
-    if((cpid = fork()) == 0) {
-
-        DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
-        int transfer_status = transfer_data(STDOUT_FILENO, server_fd);
-        DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
-
-        if(!transfer_status) {
-            perror("Error reading");
-            exit(EXIT_FAILURE);
-        }
-
-        exit(EXIT_SUCCESS);
-    }
-
-    // Parent
-
-    DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
-    int transfer_status = transfer_data(server_fd, STDIN_FILENO);
-    DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
-
-    if(!transfer_status) {
-        perror("Error reading");
-    }
-
-    /* Eliminate SIGCHLD handler and kill child. */
-    DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n",(long)getpid(),(long)cpid);
-    signal(SIGCHLD, SIG_IGN);
-    kill(cpid, SIGTERM);
-
-    // Make sure to close the connection upon exiting.
-    close_socket(server_fd);
-    tcsetattr(1, TCSAFLUSH, &prev_pty);
-    act.sa_handler = SIG_IGN;
-
-    if(sigaction(SIGCHLD, &act, NULL) == -1)
-        perror("Client: Error setting SIGCHLD");
-
-    exit(EXIT_SUCCESS);
-}
-
-int create_tty(int fd, struct termios *prev_pty) {
-
-    struct termios tty_settings;
-
-    if (tcgetattr(STDIN_FILENO, &tty_settings) == -1) {
-        perror("Getting TTY attributes failed");
-        exit(EXIT_FAILURE); 
-    }
-
-    //Save current settings so can restore:
-    saved_tty_settings = tty_settings;
-
-    tty_settings.c_lflag &= ~(ICANON | ECHO);
-    tty_settings.c_cc[VMIN] = 1;
-    tty_settings.c_cc[VTIME] = 0;
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
-        perror("Setting TTY attributes failed");
-        exit(EXIT_FAILURE); 
+        perror("(create_child_handler_signal) sigaction(): Creation of the signal handler failed!");
+        return -1;
     }
 
     return 0;
+}
+
+void sigchld_handler(int signal) {
+
+    DTRACE("%ld:Caught signal from subprocess termination...terminating!\n", (long)getpid());
+    graceful_exit();
+}
+
+
+/** Handles the communication to and from the server by creating a subprocess which handles 
+ * communication from stdin to the server. The parent process handles communication coming 
+ * from the server to the client and displays it appropriately.
+ * 
+ * Child: Sends communication from stdin -> socket.
+ * Parent: Sends communication from socket -> stdout.
+ * 
+ * Returns: None.
+*/
+void communicate_with_server(int server_fd) {
+
+    pid_t cpid;
+
+    /* CHILD PROCESS */
+    if((cpid = fork()) == 0) {
+        cpid = getppid();   /* Reuse since the child's pid isn't required here. */
+
+        DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n", (long)getpid(), server_fd);
+        if(transfer_data(STDIN_FILENO, server_fd) == -1) {
+            perror("(communicate_with_server) transfer_data(): Error reading from stdin. ");
+            graceful_exit(EXIT_FAILURE);
+        }
+        DTRACE("%ld:Completed data transfer stdin-->socket\n", (long)getpid());
+
+        graceful_exit(EXIT_SUCCESS);
+    }
+
+    /* PARENT PROCESS */
+    DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n", (long)getpid(), server_fd);
+    if(transfer_data(server_fd, STDOUT_FILENO) == -1) {
+        perror("(communicate_with_server) transfer_data(): Error reading from the server and writing to STDOUT.");
+    }
+    DTRACE("%ld:Completed data transfer socket-->stdout\n", (long)getpid());
+
+    DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n", (long)getpid(), (long)cpid);
+    signal(SIGCHLD, SIG_IGN);
+    kill(cpid, SIGTERM);
+
+    return;
 }
 
 int transfer_data(int from, int to)
@@ -195,52 +302,27 @@ int transfer_data(int from, int to)
     return 1;
 }
 
-void sigchld_handler(int signal) {
-    wait(NULL);
+void graceful_exit() {
 
-    kill(cpid, SIGTERM);
-    exit(1);
+    restore_tty_settings();
+
+    int childstatus;
+    wait(&childstatus);
+
+    //Determine if exit status should be failure:
+    if (!WIFEXITED(childstatus) || WEXITSTATUS(childstatus) != EXIT_SUCCESS) {
+        exit(EXIT_FAILURE);
+    }
+
+    exit(EXIT_SUCCESS);
 }
 
-// Closes the socket and stops the client with the appropriate exit status..
-void stop(int socket, int exit_status) {
+void restore_tty_settings() {
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
         perror("Restoring TTY attributes failed");
         exit(EXIT_FAILURE); 
     }
 
-    close_socket(socket);
-    exit(exit_status);
+    return;
 }
-
-// Closes the socket and checks for an error.
-void close_socket(int socket) {
-
-    // Close the connection.
-    if((close(socket)) == -1){
-        fprintf(stderr, "Error closing connection, error: %s\n", strerror(errno));
-    }
-}
-
-// Reads a messagr from a server and returns it as a string (null terminated).
-// Also handles read errors internally returning NULL if an error is encountered.
-char *read_server_message(int server_fd)
-{
-  static char msg[MAX_LENGTH];
-  int nread;
-  
-    if ((nread = read(server_fd, msg, MAX_LENGTH - 1)) <= 0) {
-        if (errno)
-            perror("Error reading from the server socket");
-        else
-            fprintf(stderr,"Server closed connection unexpectedly\n");
-            
-        return NULL; 
-    }
-
-  msg[nread] = '\0';
-
-  return msg;
-}
-  
