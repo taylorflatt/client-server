@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <linux/tcp.h>
 #include <netinet/in.h>
+#include "DTRACE.h"
 
 //Preprocessor constants
 #define PORT 4070
@@ -33,6 +34,7 @@ pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 void handle_client(int client_fd);
 void create_processes(int client_fd);
 pid_t pty_open(int *master_fd, int client_fd);
+int transfer_data(int from, int to);
 void sigchld_handler(int signal);
 char *read_client_message(int client_fd);
 int create_server();
@@ -159,40 +161,25 @@ void create_processes(int client_fd) {
         exit(1);
     
     // Reads from the client (socket) and writes to the master.
-    char buf[MAX_LENGTH];
     pid_t pid;
     if((pid = fork()) == 0) {
-        while(1) {
-            if(read(client_fd, &buf, 1) != 1)
-                break;
-            if(write(master_fd, &buf, 1) != 1)
-                break;
 
-            printf("Child wrote %c from sock to master\n", buf[0]);
-        }
+        DTRACE("%ld:New subprocess for data transfer socket-->PTY: PID=%ld, PGID=%ld, SID=%ld\n", (long)getppid(), (long)getpid(), (long)getpgrp(), (long)getsid(0));
+        DTRACE("%ld:Starting data transfer socket-->PTY (FD %d-->%d)\n",(long)getpid(), client_fd, master_fd);
+        transfer_data(client_fd, master_fd);
+        DTRACE("%ld:Completed data transfer socket-->PTY, so terminating...\n", (long)getpid());
 
-        exit(0);
+        exit(EXIT_SUCCESS);
     }
 
     c_pid[1] = pid;
     printf("PID of child socketreader: %d\n", (int)pid);
 
-    // Reads from the master and writes output back to client (socket).
-    while(1) {
-        int nwrite, total, read_len;
-        nwrite = 0;
-        
-        while(nwrite != -1 && (read_len = read(master_fd, &buf, MAX_LENGTH))) {
-            printf("read_len to master:%d, lenwrote to socket:%d\n", read_len, nwrite);
-            total = 0;
-
-            // Be careful that the appropriate writes are sent. Buf is not wiped.
-            do {
-                if((nwrite = write(client_fd, total + buf, read_len - total)) == -1)
-                    break;
-            } while((total += nwrite) < read_len);
-        }
-    }
+    //Loop, reading from PTY master (i.e., bash) and writing to client socket:
+    DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n",(long)getpid(), master_fd, client_fd);
+    //int transfer_status = transfer_data(ptymaster_fd,client_fd);
+    transfer_data(master_fd, client_fd);
+    DTRACE("%ld:Completed data transfer PTY-->socket\n",(long)getpid());
 
     close(client_fd);
     close(master_fd);
@@ -208,13 +195,13 @@ void create_processes(int client_fd) {
 pid_t pty_open(int *master_fd, int client_fd) {
     
     char * slavename;
-    int massa, slave_fd, err;
+    int pty_master, slave_fd, err;
 
     /* Open an unused pty dev and store the fd for later reference.
         O_RDWR := Open pty for reading + writing. 
         O_NOCTTY := Don't make it a controlling terminal for the process. 
     */
-    if((massa = posix_openpt(O_RDWR|O_NOCTTY)) == -1)
+    if((pty_master = posix_openpt(O_RDWR|O_NOCTTY)) == -1)
         return -1;
     
     /* Attempt to kickstart the master.
@@ -222,12 +209,12 @@ pid_t pty_open(int *master_fd, int client_fd) {
             to be the same as the effective user ID of the calling process and changes permissions so the owner 
             has R/W permissions.
         Unlockpt := Removes the internal lock placed on the slave corresponding to the pty. (This must be after grantpt).
-        ptsname := Returns the name of the pty slave corresponding to the pty master referred to by massa. (/dev/pts/nn).
+        ptsname := Returns the name of the pty slave corresponding to the pty master referred to by pty_master. (/dev/pts/nn).
     */
     printf("Before granting pt\n");
-    if(grantpt(massa) == -1 || unlockpt(massa) == -1 || (slavename = ptsname(massa)) == NULL) {
+    if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (slavename = ptsname(pty_master)) == NULL) {
         err = errno;
-        close(massa);
+        close(pty_master);
         errno = err;
         return -1;
     }
@@ -237,8 +224,8 @@ pid_t pty_open(int *master_fd, int client_fd) {
     if((c_pid = fork()) == 0) {
         printf("slavename = %s\n", slavename);
         
-        // Massa is not needed in the child, close it.
-        close(massa);
+        // pty_master is not needed in the child, close it.
+        close(pty_master);
         close(client_fd);
 
         if(setsid() == -1) {
@@ -252,41 +239,33 @@ pid_t pty_open(int *master_fd, int client_fd) {
         }
 
         printf("Setting dup\n");
-        if(dup2(slave_fd, STDIN_FILENO) < 0) {
-            fprintf(stderr, "Stdin redirection error.\n");
-            return -1;
+        if ((dup2(slave_fd, STDIN_FILENO) == -1) || (dup2(slave_fd, STDOUT_FILENO) == -1) || (dup2(slave_fd, STDERR_FILENO) == -1)) {
+            perror("dup2() call for FD 0, 1, or 2 failed");
+            exit(EXIT_FAILURE); 
         }
-        if(dup2(slave_fd, STDOUT_FILENO) < 0) {
-            fprintf(stderr, "Stdout redirection error.\n");
-            return -1;
-        }
-        if(dup2(slave_fd, STDERR_FILENO) < 0) {
-            fprintf(stderr, "Stderr redirection error.\n");
-            return -1;
-        }
+
+        /* No longer needed and don't want it open within bash. */
+        close(slave_fd);
 
         execlp("bash", "bash", NULL);
 
-        if(slave_fd > STDERR_FILENO)
-            close(slave_fd);
-
-        // Shouldn't ever go this far.
-        //return -1;
+        /* Should never reach this point. */
+        exit(EXIT_FAILURE);
     }
 
     printf("slave pid = %d\n", (int)c_pid);
 
-    * master_fd = massa;
+    * master_fd = pty_master;
     return c_pid;
 }
 
 int transfer_data(int from, int to)
 {
-    char buff[MAX_LENGTH];
+    char buf[MAX_LENGTH];
     ssize_t nread, nwrite;
 
-    while ((nread = read(from, buff, MAX_LENGTH)) > 0) {
-    if ((nwrite = write(to, buff, nread)) == -1) break;
+    while ((nread = read(from, buf, MAX_LENGTH)) > 0) {
+    if ((nwrite = write(to, buf, nread)) == -1) break;
     }
 
     #ifdef DEBUG
@@ -304,8 +283,6 @@ int transfer_data(int from, int to)
 // Collects processes.
 void sigchld_handler(int sig) {
     wait(NULL);
-
-    char read_string[MAX_LENGTH];
 
     kill(c_pid[0], sig);
     kill(c_pid[1], sig);

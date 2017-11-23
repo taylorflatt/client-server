@@ -28,6 +28,8 @@ int transfer_data(int from, int to);
 void sigchld_handler(int signal);
 void stop(int socket, int exit_status);
 
+struct termios saved_tty_settings;
+
 pid_t cpid;
 
 int main(int argc, char *argv[]){
@@ -112,39 +114,33 @@ int main(int argc, char *argv[]){
     // TODO: Swap over to the server method of writing so I'm not using memset.
     // Create a child process.
     if((cpid = fork()) == 0) {
-        while(1) {
 
-            DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
-            int transfer_status = transfer_data(STDOUT_FILENO, server_fd);
-            DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
-
-            if(!transfer_status) {
-                perror("Error reading");
-                exit(EXIT_FAILURE);
-            }
-
-            exit(EXIT_SUCCESS);
-        }
-    }
-
-    // Parent
-    while(1) {
-
-        DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
-        int transfer_status = transfer_data(server_fd, STDIN_FILENO);
-        DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
+        DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
+        int transfer_status = transfer_data(STDOUT_FILENO, server_fd);
+        DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
 
         if(!transfer_status) {
             perror("Error reading");
+            exit(EXIT_FAILURE);
         }
 
-        /* Eliminate SIGCHLD handler and kill child. */
-        DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n",(long)getpid(),(long)cpid);
-        signal(SIGCHLD, SIG_IGN);
-        kill(cpid, SIGTERM);
-
-        return 0;
+        exit(EXIT_SUCCESS);
     }
+
+    // Parent
+
+    DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
+    int transfer_status = transfer_data(server_fd, STDIN_FILENO);
+    DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
+
+    if(!transfer_status) {
+        perror("Error reading");
+    }
+
+    /* Eliminate SIGCHLD handler and kill child. */
+    DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n",(long)getpid(),(long)cpid);
+    signal(SIGCHLD, SIG_IGN);
+    kill(cpid, SIGTERM);
 
     // Make sure to close the connection upon exiting.
     close_socket(server_fd);
@@ -158,24 +154,23 @@ int main(int argc, char *argv[]){
 }
 
 int create_tty(int fd, struct termios *prev_pty) {
-    struct termios pty;
 
-    // Gets the parameters of the pty and stores them in pty.
-    if(tcgetattr(fd, &pty) == -1) {
-        printf("Could not get the parameters associated with the pty.");
-        return -1;        
+    struct termios tty_settings;
+
+    if (tcgetattr(STDIN_FILENO, &tty_settings) == -1) {
+        perror("Getting TTY attributes failed");
+        exit(EXIT_FAILURE); 
     }
 
-    if(prev_pty != NULL)
-        *prev_pty = pty;
+    //Save current settings so can restore:
+    saved_tty_settings = tty_settings;
 
-    // Turn canonical mode off and no extended functions.
-    pty.c_lflag &= ~(ICANON|IEXTEN);
-
-    // Put terminal in raw mode after flushing.
-    if(tcsetattr(fd, TCSAFLUSH, &pty) == -1) {
-        printf("Could not set terminal parameters.\n");
-        return -1;
+    tty_settings.c_lflag &= ~(ICANON | ECHO);
+    tty_settings.c_cc[VMIN] = 1;
+    tty_settings.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_settings) == -1) {
+        perror("Setting TTY attributes failed");
+        exit(EXIT_FAILURE); 
     }
 
     return 0;
@@ -209,6 +204,11 @@ void sigchld_handler(int signal) {
 
 // Closes the socket and stops the client with the appropriate exit status..
 void stop(int socket, int exit_status) {
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tty_settings) == -1) {
+        perror("Restoring TTY attributes failed");
+        exit(EXIT_FAILURE); 
+    }
 
     close_socket(socket);
     exit(exit_status);
