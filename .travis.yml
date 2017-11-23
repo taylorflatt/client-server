@@ -1,9 +1,8 @@
 language: c
 compiler: gcc
-env:
-  - TEST_DIR=Lab1
-  - TEST_DIR=Lab2
-  - TEST_DIR=Lab3
-  - TEST_DIR=Lab4
-  - TEST_DIR=Lab5
-script: cd $TEST_DIR && make clientD && make serverD
+script: 
+  - cd Lab1 && make client && make server
+  - cd Lab2 && make clientD && make serverD
+  - cd Lab3 && make clientD && make serverD
+  - cd Lab4 && make poolD
+  - cd Lab5 && make clientD && make serverD
