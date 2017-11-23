@@ -26,7 +26,7 @@
 #define ERROR "<error>\n"
 
 /* Global Variables */
-int c_pid[5];   /* Stores the subprocess PIDs so they can be closed. */
+int c_pid[2];   /* Stores the subprocess PIDs so they can be closed. */
 
 /* Prototypes. */
 int create_server();
@@ -49,7 +49,7 @@ int main(int argc, char *argv[]) {
     }
 
     if(signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        fprintf(stderr, "Error setting SIGCHLD to SIG_IGN.");
+        perror("(main) signal(): Failed setting SIGCHLD to SIG_IGN.");
         exit(EXIT_FAILURE);
     }
 
@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
         /* Accept a new connection and get a socket to use for client. */
         client_len = sizeof(client_address);
         if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
-            fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
+            perror("(main) accept(): Failed accepting a client.");
         }
         
         /* Fork the client provided the fd is valid. */
@@ -86,12 +86,14 @@ int create_server() {
     struct sockaddr_in server_address;
 
     if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
+        perror("(create_server) socket(): Error creating the socket.");
     }
+
+    DTRACE("%ld:Starting server=%d.\n", (long)getpid(), server_sockfd);
 
     int i=1;
     if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-        fprintf(stderr, "Error setting sockopt.");
+        perror("(create_server) setsockopt(): Error setting the server socket options.");
         return -1;
     }
 
@@ -100,12 +102,12 @@ int create_server() {
     server_address.sin_port = htons(PORT);
 
     if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
-        fprintf(stderr, "Error assigning address to socket, error: %s\n", strerror(errno));
+        perror("(create_server) bind(): Error assigning an address to the socket.");
     }
 
-    // Start listening to server socket.
+    /* Start listening to server socket. */
     if((listen(server_sockfd, 10)) == -1){
-        fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
+        perror("(create_server) listen(): Error listening to the socket.");
     }
 
     return server_sockfd;
@@ -120,7 +122,7 @@ void handle_client(int client_fd) {
     
     char *pass;
 
-    printf("Sending challenge to client.\n");
+    DTRACE("%ld:Sending challenge to client=%d\n", (long)getpid(), client_fd);
     /* Send challenge to client. */
     write(client_fd, CHALLENGE, strlen(CHALLENGE));
 
@@ -130,15 +132,13 @@ void handle_client(int client_fd) {
     
     /* Validate the client's response. */
     if(strcmp(pass, SECRET) == 0) {
-        printf("Challenge passed. Moving into accept client.\n");
-
-
+        DTRACE("%ld:Client=%d has been validated.\n", (long)getpid(), client_fd);
         create_processes(client_fd);
         
     }  else {
-        // Invalid secret, tell the client.
+        /* Invalid secret, tell the client. */
         write(client_fd, ERROR, strlen(ERROR));
-        fprintf(stderr, "Aborting connection. Invalid secret: %s", pass);
+        perror("(handle_client) write(): Invalid secret, aborting connection!");
     }
 }
 
@@ -163,17 +163,19 @@ void create_processes(int client_fd) {
     sigemptyset(&act.sa_mask);
 
     if(sigaction(SIGCHLD, &act, NULL) == -1) {
-        perror("Creation of the signal handler failed!");
-        exit(1);
+        perror("(create_processes) sigaction(): Error creating the signal handler.");
+        exit(EXIT_FAILURE);
     }
 
     printf("Setting c_pid[0] to open_pty.\n");
 
-    if((c_pid[0] = open_pty(&master_fd, client_fd)) == -1) 
-        exit(1);
+    if((c_pid[0] = open_pty(&master_fd, client_fd)) == -1) {
+        perror("(create_processes) open_pty(): Error setting up the pty for the client.");
+        exit(EXIT_FAILURE);
+    }
 
     if(sigaction(SIGCHLD, &act, NULL) == -1) {
-        perror("Client: Error setting SIGCHLD");
+        perror("(create_processes) sigaction(): Error setting signal for SIGCHLD.");
         return;
     }
     
@@ -234,7 +236,6 @@ pid_t open_pty(int *master_fd, int client_fd) {
         Unlockpt := Removes the internal lock placed on the slave corresponding to the pty. (This must be after grantpt).
         ptsname := Returns the name of the pty slave corresponding to the pty master referred to by pty_master. (/dev/pts/nn).
     */
-    printf("Before granting pt\n");
     if(grantpt(pty_master) == -1 || unlockpt(pty_master) == -1 || (slavename = ptsname(pty_master)) == NULL) {
         err = errno;
         close(pty_master);
@@ -252,18 +253,18 @@ pid_t open_pty(int *master_fd, int client_fd) {
         close(client_fd);
 
         if(setsid() == -1) {
-            printf("Could not create a new session.\n");
+            perror("(open_pty) setsid(): Error creating a new session.");
             return -1;            
         }
 
         if((slave_fd = open(slavename, O_RDWR)) == -1) {
-            printf("Could not open %s\n", slavename);
+            perror("(open_pty) open(): Error opening the slave_fd for RW IO.");
             return -1;
         }
 
         printf("Setting dup\n");
         if ((dup2(slave_fd, STDIN_FILENO) == -1) || (dup2(slave_fd, STDOUT_FILENO) == -1) || (dup2(slave_fd, STDERR_FILENO) == -1)) {
-            perror("dup2() call for FD 0, 1, or 2 failed");
+            perror("(open_pty) dup2(): Error redirecting in/out/error.");
             exit(EXIT_FAILURE); 
         }
 
@@ -354,10 +355,11 @@ char *read_client_message(int client_fd)
   int nread;
   
     if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
-        if (errno)
-            perror("Error reading from the client socket");
-        else
-            fprintf(stderr, "Client closed connection unexpectedly\n");
+        if (errno) {
+            perror("(read_client_message) read(): Error reading.");
+        } else {
+            perror("(read_client_message) read(): The client connection closed unexpectedly.");
+        }
             
         return NULL; 
     }
