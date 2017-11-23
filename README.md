@@ -49,3 +49,28 @@ Then connect a client (or more) using the server IP:
 ```
 ./client 127.0.0.1
 ```
+
+## Auxiliary Scripts
+### show-clients
+Shows all of the clients called "client" which are currently running for a server using the ps command. It also shows all of the open threads and processes.
+
+To run the script, simply cd into its directory and run:
+```
+./show-client
+```
+
+### show-server
+Shows all of the clients called "server" which are currently running using the ps command. It also shows all of the open threads and processes.
+
+To run the script, simply cd into its directory and run:
+```
+./show-server
+```
+
+### show-sockets
+Shows all of the sockets open on the port the server is using. Default is set to 4070. If the default port is changed within the server, it must be changed within the script.
+
+To run the script, simply cd into its directory and run:
+```
+./show-sockets
+```
