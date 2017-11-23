@@ -1,0 +1,44 @@
+#!/bin/bash
+
+if [[ $# != 0 ]]; then
+    echo "Usage show-client"
+    exit 1
+fi
+
+
+function get_descendents()
+{
+    local descendents=
+
+    for pid in $(pgrep -P "$1"); do
+        descendents="$descendents $pid"
+        pid_descendents=$(get_descendents $pid)
+        if [[ -n "$pid_descendents" ]]; then
+            descendents="$descendents $pid_descendents"
+        fi
+    done
+
+    echo $descendents
+}
+
+
+client=$(ps -C client -o pid= | head -n1)
+
+if [[ -z $client ]]; then
+    echo "No client process!"
+    exit 1
+fi
+
+descendents=$(get_descendents $client)
+
+echo "Client processes and threads:"
+ps -L -o pid,tid,ppid,stat,comm $server $descendents
+echo
+
+for p in $client $descendents; do
+    /usr/bin/lsof -a -R -d '^cwd,^txt,^mem,^rtd' -p $p
+done
+
+exit
+
+#EOF

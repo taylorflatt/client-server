@@ -11,6 +11,7 @@
 #include <termios.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include "DTRACE.h"
 
 // Preprocessor Constants
 #define MAX_LENGTH 4096
@@ -23,17 +24,17 @@
 void close_socket(int connect_fd);
 char *read_server_message(int server_fd);
 int create_tty(int fd, struct termios *prev_pty);
+int transfer_data(int from, int to);
 void sigchld_handler(int signal);
 void stop(int socket, int exit_status);
 
 pid_t cpid;
 
 int main(int argc, char *argv[]){
-    int sock_fd, numBytesRead, status;
+    int server_fd;
     struct sockaddr_in serv_address;
-    char ip[MAX_LENGTH], buf[MAX_LENGTH];
+    char ip[MAX_LENGTH];
     char *handshake;
-    pid_t pid;
 
     // Check command-line arguments and store ip.
     if(argc != 2) {
@@ -45,7 +46,7 @@ int main(int argc, char *argv[]){
     }
 
     // Create client socket.
-    if((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
@@ -56,13 +57,13 @@ int main(int argc, char *argv[]){
     inet_aton(ip, &serv_address.sin_addr);
 
     // Connect the client and server sockets.
-    if((connect(sock_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
+    if((connect(server_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
         fprintf(stderr, "Error connecting to server, error: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
     
     // Receive the challenge.
-    if((handshake = read_server_message(sock_fd)) == NULL) {
+    if((handshake = read_server_message(server_fd)) == NULL) {
         exit(EXIT_FAILURE);
     }
 
@@ -73,13 +74,13 @@ int main(int argc, char *argv[]){
     }
 
     // Send secret to the server for verification.
-    if((write(sock_fd, SECRET, strlen(SECRET))) == -1) {
+    if((write(server_fd, SECRET, strlen(SECRET))) == -1) {
         fprintf(stderr, "Error sending secret to server, error: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
 
     // Receive server verification.
-    if((handshake = read_server_message(sock_fd)) == NULL) {
+    if((handshake = read_server_message(server_fd)) == NULL) {
         exit(EXIT_FAILURE);
     }
 
@@ -104,7 +105,7 @@ int main(int argc, char *argv[]){
     struct termios prev_pty;
     if(create_tty(1, &prev_pty) == -1) {
         tcsetattr(1, TCSAFLUSH, &prev_pty);
-        close(sock_fd);
+        close(server_fd);
         perror("Tcsetattr failed.");
     }
 
@@ -113,57 +114,40 @@ int main(int argc, char *argv[]){
     if((cpid = fork()) == 0) {
         while(1) {
 
-            // Read from client's stdin.
-            if((numBytesRead = read(STDIN_FILENO, &buf, sizeof(buf))) < 0) {
-                if(errno == -1)
-                    perror("Child: Failed read from the server!");
-                stop(sock_fd, EXIT_FAILURE);
+            DTRACE("%ld:Starting data transfer stdin-->socket (FD 0-->%d)\n",(long)getpid(),server_fd);
+            int transfer_status = transfer_data(STDOUT_FILENO, server_fd);
+            DTRACE("%ld:Completed data transfer stdin-->socket\n",(long)getpid());
+
+            if(!transfer_status) {
+                perror("Error reading");
+                exit(EXIT_FAILURE);
             }
 
-            // The reader exited normally.
-            if(numBytesRead == 0)
-                stop(sock_fd, EXIT_FAILURE);
-
-            // Write to server's socket.
-            if(write(sock_fd, buf, strlen(buf) + 1) < 0) {
-                perror("Child: Failed to write to server.");
-                stop(sock_fd, EXIT_FAILURE);
-            }
-            
-            // Reset the data so no old data is floating around.
-            memset(buf, 0, sizeof(buf));
+            exit(EXIT_SUCCESS);
         }
     }
 
     // Parent
     while(1) {
 
-        // Read from the server socket.
-        if((numBytesRead = read(sock_fd, &buf, sizeof(buf))) < 0) {
-            perror("Parent: Failed to read from the server.");
-            stop(sock_fd, EXIT_FAILURE);
+        DTRACE("%ld:Starting data transfer socket-->stdout (FD %d-->1)\n",(long)getpid(),server_fd);
+        int transfer_status = transfer_data(server_fd, STDIN_FILENO);
+        DTRACE("%ld:Completed data transfer socket-->stdout\n",(long)getpid());
+
+        if(!transfer_status) {
+            perror("Error reading");
         }
 
-        // The reader exited normally.
-        if(numBytesRead == 0)
-            stop(sock_fd, EXIT_FAILURE);
+        /* Eliminate SIGCHLD handler and kill child. */
+        DTRACE("%ld:Normal transfer completion, terminating child (%ld)\n",(long)getpid(),(long)cpid);
+        signal(SIGCHLD, SIG_IGN);
+        kill(cpid, SIGTERM);
 
-        // Write to stdout from the server.
-        if(write(STDOUT_FILENO, buf, strlen(buf) + 1) < 0) {
-            perror("Parent: Failed to write to server.");
-            stop(sock_fd, EXIT_FAILURE);
-        }
-
-        // Reset the data so no old data is floating around.
-        memset(buf, 0, sizeof(buf));
-
-        // Check if the child is still running. If not, clean it up. (WNOHANG = nonblocking)
-        if((pid = waitpid(cpid, &status, WNOHANG) != 0))
-            stop(sock_fd, cpid);
+        return 0;
     }
 
     // Make sure to close the connection upon exiting.
-    close_socket(sock_fd);
+    close_socket(server_fd);
     tcsetattr(1, TCSAFLUSH, &prev_pty);
     act.sa_handler = SIG_IGN;
 
@@ -195,6 +179,25 @@ int create_tty(int fd, struct termios *prev_pty) {
     }
 
     return 0;
+}
+
+int transfer_data(int from, int to)
+{
+    char buff[4096];
+    ssize_t nread;
+
+    while ((nread = read(from, buff, MAX_LENGTH)) > 0) {
+        if (write(to, buff, nread) == -1) break;
+    }
+
+    if (nread == 0)
+    DTRACE("%ld:EOF on FD %d!\n", (long)getpid(), from);
+
+    //In case of an error, return false/fail:
+    if (errno) return 0;
+
+    //Normal true/success return:
+    return 1;
 }
 
 void sigchld_handler(int signal) {
