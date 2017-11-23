@@ -352,7 +352,13 @@ cstate_t get_cstate(int fd) {
     return client_fd_tuples[fd] -> state;
 }
 
-
+/** Creates the client object and stores it in memory. It also adds 
+ * the client to the main epoll.
+ * 
+ * sock: A socket which will be added to epoll.
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+ */
 int register_client(int sock) {
 
     DTRACE("%ld:Begun registering CLIENT=%d.\n", (long)getpid(), sock);
