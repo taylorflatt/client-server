@@ -1,4 +1,4 @@
-# Iterative client-server
+# Iterative client-server [![Build Status](https://travis-ci.org/taylorflatt/client-server.svg?branch=master)](https://travis-ci.org/taylorflatt/client-server)
 
 ## Background
 Developed for Advanced C Programming (CS 591) in Fall 2017, each lab represents a step towards the "ultimate" client-server.
