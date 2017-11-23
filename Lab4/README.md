@@ -1,6 +1,6 @@
 
 # Lab 3
-Completed on October 10th.
+Completed on October 30th.
 
 ## Description
 A concurrent client-server which creates many subprocesses to handle client communication. The assumption is that all writes are full; thus no partial writes are handled. One primary distinction between this implementation and the previous implementation is that clients are handled in the server using a single pthread and all communication is done using a single pthread (for all clients).
