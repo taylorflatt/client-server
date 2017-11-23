@@ -259,7 +259,7 @@ pid_t open_pty(int *master_fd, int client_fd) {
             perror("(open_pty) open(): Error opening the slave_fd for RW IO.");
             return -1;
         }
-        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n", (long)getppid(), pty_master, pty_slave);  
+        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%d.\n", (long)getppid(), pty_master, slave_fd);  
 
         if ((dup2(slave_fd, STDIN_FILENO) == -1) || (dup2(slave_fd, STDOUT_FILENO) == -1) || (dup2(slave_fd, STDERR_FILENO) == -1)) {
             perror("(open_pty) dup2(): Error redirecting in/out/error.");
