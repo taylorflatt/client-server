@@ -259,6 +259,7 @@ pid_t open_pty(int *master_fd, int client_fd) {
             perror("(open_pty) open(): Error opening the slave_fd for RW IO.");
             return -1;
         }
+
         DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%d.\n", (long)getppid(), pty_master, slave_fd);  
 
         if ((dup2(slave_fd, STDIN_FILENO) == -1) || (dup2(slave_fd, STDOUT_FILENO) == -1) || (dup2(slave_fd, STDERR_FILENO) == -1)) {
@@ -275,7 +276,8 @@ pid_t open_pty(int *master_fd, int client_fd) {
         exit(EXIT_FAILURE);
     }
 
-    * master_fd = pty_master;
+    /* Set the master pty correctly. */
+    *master_fd = pty_master;
     return c_pid;
 }
 
