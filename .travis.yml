@@ -6,6 +6,7 @@ before_install:
   - chmod +x Lab3/buildTest.sh
   - chmod +x Lab4/buildTest.sh
   - chmod +x Lab5/buildTest.sh
+  - chmod +x Lab5/brokenTests.sh
 script: Lab1/buildTest.sh
 jobs:
   include:
