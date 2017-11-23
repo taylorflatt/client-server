@@ -35,3 +35,17 @@ The code was written with Linux in mind and doesn't necessarily conform to POSIX
 *<sup><sub>It is important to note that there will be at least 1 process created for bash.</sub></sup>
 
 **<sup><sub>Lab 3 handles malicious clients by using timers whereas Lab5 uses timerfd with its own epoll unit.</sub></sup>
+
+## Usage
+
+First start by running the server:
+
+```
+./server
+```
+
+Then connect a client (or more) using the server IP:
+
+```
+./client 127.0.0.1
+```
