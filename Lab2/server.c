@@ -207,7 +207,14 @@ void create_processes(int client_fd) {
     return;
 }
 
-// Creates the master and slave pty.
+/** Opens the PTY and creates the connection between bash and the client by forking off a subprocess 
+ * to run bash.
+ * 
+ * master_fd: A pointer to the master file descriptor for a client.
+ * client_fd: An integer corresponding to the client's file descriptor.
+ * 
+ * Returns: A pid_t representing the PID of the forked child process.
+*/
 pid_t open_pty(int *master_fd, int client_fd) {
     
     char * slavename;
@@ -275,31 +282,49 @@ pid_t open_pty(int *master_fd, int client_fd) {
     return c_pid;
 }
 
+/** Transfers data between two file descriptors.
+ * 
+ * from: Integer representing the source file descriptor (read).
+ * 
+ * Returns: An integer corresponding to the success 0, or failure -1.
+*/
 int transfer_data(int from, int to)
 {
     char buf[MAX_LENGTH];
     ssize_t nread, nwrite;
 
     while ((nread = read(from, buf, MAX_LENGTH)) > 0) {
-    if ((nwrite = write(to, buf, nread)) == -1) break;
+        if ((nwrite = write(to, buf, nread)) == -1) {
+            break;
+        }
     }
 
-    #ifdef DEBUG
-    if (nread == -1) DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(), from);
-    if (nwrite == -1) DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(), to);
-    #endif
+    if (nread == -1) {
+        DTRACE("%ld:Error read()'ing from FD %d\n",(long)getpid(), from);
+    } 
+    if (nwrite == -1) {
+        DTRACE("%ld:Error write()'ing to FD %d\n",(long)getpid(), to);
+    }
 
-    //In case of an error, return false/fail:
-    if (errno) return 0;
+    if (errno) {
+        return -1;
+    }
 
-    //Normal true/success return:
-    return 1;
+    return 0;
 }
 
 // Collects processes.
+/** Catches signals and closes the client subprocesses out nicely collecting children.
+ * 
+ * signal: The signal that was sent.
+ * sip: A pointer which contains signal information such as the PID.
+ * ignore: Unused.
+ * 
+ * Returns: None.
+ */
 void sigchld_handler(int signal, siginfo_t *sip, void *ignore) {
 
-    //Terminate other child process:
+    /* Terminate the process which didn't create the signal. */
     if (sip->si_pid == c_pid[0]) {
         DTRACE("%ld:SIGCHLD handler invoked due to PID:%d (bash), killing %d\n", (long)getpid(), sip->si_pid, c_pid[1]);
         kill(c_pid[1], SIGTERM); 
@@ -308,16 +333,21 @@ void sigchld_handler(int signal, siginfo_t *sip, void *ignore) {
         kill(c_pid[0], SIGTERM); 
     }
 
-    //Collect any/all killed child processes for this client:
+    /* Collect all children for the client. */
     while (waitpid(-1, NULL, WNOHANG) > 0);
 
-    //Terminate the parent without returning since no point:
+    /* Terminate the parent client. */
     DTRACE("%ld:Terminating (client)...\n", (long)getpid());
     _exit(EXIT_SUCCESS);
 }
 
-// Reads a messagr from a server and returns it as a string (null terminated).
-// Also handles read errors internally returning NULL if an error is encountered.
+/** Reads the handshake messages.
+ * 
+ * client_fd: An integer corresponding to the clients's file descriptor.
+ * 
+ * Returns: A null terminated string if successful, otherwise NULL if an error is
+ *          encountered.
+*/
 char *read_client_message(int client_fd)
 {
   static char msg[MAX_LENGTH];
