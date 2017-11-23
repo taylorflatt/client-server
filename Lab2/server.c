@@ -16,7 +16,7 @@
 #include <netinet/in.h>
 #include "DTRACE.h"
 
-//Preprocessor constants
+/* Preprocessor constants. */
 #define PORT 4070
 #define MAX_LENGTH 4096
 #define MAX_NUM_CLIENTS 64000
@@ -25,12 +25,10 @@
 #define PROCEED "<ok>\n"
 #define ERROR "<error>\n"
 
-int c_pid[5];
+/* Global Variables */
+int c_pid[5];   /* Stores the subprocess PIDs so they can be closed. */
 
-int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
-pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
-
-//Prototypes
+/* Prototypes. */
 int create_server();
 void handle_client(int client_fd);
 void create_processes(int client_fd);
@@ -57,16 +55,16 @@ int main(int argc, char *argv[]) {
 
     // Main server loop
     while(1) {
-        // Collect any terminated children before attempting to accept a new connection.
+        /* Collect any terminated children before attempting to accept a new connection. */
         while (waitpid(-1,NULL,WNOHANG) > 0);
         
-        // Accept a new connection and get socket to use for client:
+        /* Accept a new connection and get a socket to use for client. */
         client_len = sizeof(client_address);
         if((client_fd = accept(server_sockfd, (struct sockaddr *) &client_address, &client_len)) == -1) {
             fprintf(stderr, "Error making connection, error: %s\n", strerror(errno));
         }
         
-        // Fork immediately.
+        /* Fork the client provided the fd is valid. */
         if(client_fd != -1) {
             if(fork() == 0) {
                 close(server_sockfd);
@@ -79,6 +77,10 @@ int main(int argc, char *argv[]) {
     exit(EXIT_SUCCESS);
 }
 
+/** Creates the server by setting up the socket and begins listening.
+ * 
+ * Returns: An integer corresponding to server's file descriptor on success or failure -1.
+*/
 int create_server() {
     int server_sockfd;
     struct sockaddr_in server_address;
@@ -109,26 +111,28 @@ int create_server() {
     return server_sockfd;
 }
 
-// Handles the three-way handshake and starts up the create_processes method.
+/** Delegator function which validates the client and creates the sub-processes for 
+ * communication with the client.
+ * 
+ * Returns: None.
+*/
 void handle_client(int client_fd) {
     
     char *pass;
 
-    // Send challenge to client.
     printf("Sending challenge to client.\n");
-
+    /* Send challenge to client. */
     write(client_fd, CHALLENGE, strlen(CHALLENGE));
 
-    // Read password from client.
+    /* Receive the client's password. */
     if((pass = read_client_message(client_fd)) == NULL)
         return;
     
-    // Make sure the password is good.
+    /* Validate the client's response. */
     if(strcmp(pass, SECRET) == 0) {
         printf("Challenge passed. Moving into accept client.\n");
 
-        // let client know shell is ready by sending <ok>\n
-        write(client_fd, PROCEED, strlen(PROCEED));
+
         create_processes(client_fd);
         
     }  else {
@@ -138,7 +142,17 @@ void handle_client(int client_fd) {
     }
 }
 
-// Creates two processes which read and write on a socket connecting the client and server.
+/** Function performs the following duties:
+ *      - Creates a signal handler for the client.
+ *      - Creates a bash pty for the client.
+ *      - Creates a subprocess which relays data from the client to the pty.
+ *      - Creates a subprocess which relays data from the pty to the client.
+ *      - Collects processes after successful completion.
+ * 
+ * client_fd: File descriptor for a client process.
+ * 
+ * Returns: None.
+ */
 void create_processes(int client_fd) {
     
     int master_fd;
@@ -163,7 +177,7 @@ void create_processes(int client_fd) {
         return;
     }
     
-    // Reads from the client (socket) and writes to the master.
+    /* Reads from the client (socket) and writes to the master. */
     if((c_pid[1] = fork()) == 0) {
 
         DTRACE("%ld:New subprocess for data transfer socket-->PTY: PID=%ld, PGID=%ld, SID=%ld\n", (long)getppid(), (long)getpid(), (long)getpgrp(), (long)getsid(0));
@@ -174,9 +188,11 @@ void create_processes(int client_fd) {
         exit(EXIT_SUCCESS);
     }
 
-    //Loop, reading from PTY master (i.e., bash) and writing to client socket:
+    /* Let the client know things are ready to proceed. */
+    write(client_fd, PROCEED, strlen(PROCEED));
+
+    /* Read from the pty and write to the client. */
     DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n",(long)getpid(), master_fd, client_fd);
-    //int transfer_status = transfer_data(ptymaster_fd,client_fd);
     transfer_data(master_fd, client_fd);
     DTRACE("%ld:Completed data transfer PTY-->socket\n",(long)getpid());
 
@@ -185,7 +201,7 @@ void create_processes(int client_fd) {
     kill(c_pid[0], SIGTERM);
     kill(c_pid[1], SIGTERM);
 
-    //Collect any remaining child processes for this client (bash and data relay):
+    /* Collect any remaining child processes for the client. */
     while (waitpid(-1,NULL,WNOHANG) > 0);
         
     return;
