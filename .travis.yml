@@ -1,8 +1,10 @@
 language: c
 compiler: gcc
-script: 
-  - cd Lab1 && make client && make server
-  - cd Lab2 && make clientD && make serverD
-  - cd Lab3 && make clientD && make serverD
-  - cd Lab4 && make poolD
-  - cd Lab5 && make clientD && make serverD
+jobs:
+  include:
+    - stage: Test
+      script: Lab1/buildTest.sh
+      script: Lab2/buildTest.sh
+      script: Lab3/buildTest.sh
+      script: Lab4/buildTest.sh
+      script: Lab5/buildTest.sh

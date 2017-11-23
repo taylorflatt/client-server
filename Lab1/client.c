@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include "readline.c"
 
 // Preprocessor Constants
 #define MAX_LENGTH 4096
