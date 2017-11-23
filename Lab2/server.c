@@ -31,43 +31,13 @@ int client_fd_tuples[MAX_NUM_CLIENTS * 2 + 5];
 pid_t bash_fd[MAX_NUM_CLIENTS * 2 + 5];
 
 //Prototypes
+int create_server();
 void handle_client(int client_fd);
 void create_processes(int client_fd);
-pid_t pty_open(int *master_fd, int client_fd);
+pid_t open_pty(int *master_fd, int client_fd);
 int transfer_data(int from, int to);
-void sigchld_handler(int signal);
+void sigchld_handler(int signal, siginfo_t *sip, void *ignore);
 char *read_client_message(int client_fd);
-int create_server();
-
-int create_server() {
-    int server_sockfd;
-    struct sockaddr_in server_address;
-
-    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
-    }
-
-    int i=1;
-    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
-        fprintf(stderr, "Error setting sockopt.");
-        return -1;
-    }
-
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(PORT);
-
-    if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
-        fprintf(stderr, "Error assigning address to socket, error: %s\n", strerror(errno));
-    }
-
-    // Start listening to server socket.
-    if((listen(server_sockfd, 10)) == -1){
-        fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
-    }
-
-    return server_sockfd;
-}
 
 int main(int argc, char *argv[]) {
 
@@ -109,6 +79,36 @@ int main(int argc, char *argv[]) {
     exit(EXIT_SUCCESS);
 }
 
+int create_server() {
+    int server_sockfd;
+    struct sockaddr_in server_address;
+
+    if((server_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fprintf(stderr, "Error creating socket, error: %s\n", strerror(errno));
+    }
+
+    int i=1;
+    if(setsockopt(server_sockfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
+        fprintf(stderr, "Error setting sockopt.");
+        return -1;
+    }
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_address.sin_port = htons(PORT);
+
+    if((bind(server_sockfd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
+        fprintf(stderr, "Error assigning address to socket, error: %s\n", strerror(errno));
+    }
+
+    // Start listening to server socket.
+    if((listen(server_sockfd, 10)) == -1){
+        fprintf(stderr, "Error listening to socket, error: %s\n", strerror(errno));
+    }
+
+    return server_sockfd;
+}
+
 // Handles the three-way handshake and starts up the create_processes method.
 void handle_client(int client_fd) {
     
@@ -119,11 +119,9 @@ void handle_client(int client_fd) {
 
     write(client_fd, CHALLENGE, strlen(CHALLENGE));
 
-    // TIMER FOR SIGNAL HANDLER
     // Read password from client.
     if((pass = read_client_message(client_fd)) == NULL)
         return;
-    // STOP TIMER.
     
     // Make sure the password is good.
     if(strcmp(pass, SECRET) == 0) {
@@ -146,8 +144,8 @@ void create_processes(int client_fd) {
     int master_fd;
 
     struct sigaction act;
-    act.sa_handler = sigchld_handler;
-    act.sa_flags = 0;
+    act.sa_sigaction = sigchld_handler;
+    act.sa_flags = SA_SIGINFO|SA_RESETHAND;  /* SA_SIGINFO required to use .sa_sigaction instead of .sa_handler. */
     sigemptyset(&act.sa_mask);
 
     if(sigaction(SIGCHLD, &act, NULL) == -1) {
@@ -155,14 +153,18 @@ void create_processes(int client_fd) {
         exit(1);
     }
 
-    printf("Setting c_pid[0] to pty_open.\n");
+    printf("Setting c_pid[0] to open_pty.\n");
 
-    if((c_pid[0] = pty_open(&master_fd, client_fd)) == -1) 
+    if((c_pid[0] = open_pty(&master_fd, client_fd)) == -1) 
         exit(1);
+
+    if(sigaction(SIGCHLD, &act, NULL) == -1) {
+        perror("Client: Error setting SIGCHLD");
+        return;
+    }
     
     // Reads from the client (socket) and writes to the master.
-    pid_t pid;
-    if((pid = fork()) == 0) {
+    if((c_pid[1] = fork()) == 0) {
 
         DTRACE("%ld:New subprocess for data transfer socket-->PTY: PID=%ld, PGID=%ld, SID=%ld\n", (long)getppid(), (long)getpid(), (long)getpgrp(), (long)getsid(0));
         DTRACE("%ld:Starting data transfer socket-->PTY (FD %d-->%d)\n",(long)getpid(), client_fd, master_fd);
@@ -172,27 +174,25 @@ void create_processes(int client_fd) {
         exit(EXIT_SUCCESS);
     }
 
-    c_pid[1] = pid;
-    printf("PID of child socketreader: %d\n", (int)pid);
-
     //Loop, reading from PTY master (i.e., bash) and writing to client socket:
     DTRACE("%ld:Starting data transfer PTY-->socket (FD %d-->%d)\n",(long)getpid(), master_fd, client_fd);
     //int transfer_status = transfer_data(ptymaster_fd,client_fd);
     transfer_data(master_fd, client_fd);
     DTRACE("%ld:Completed data transfer PTY-->socket\n",(long)getpid());
 
-    close(client_fd);
-    close(master_fd);
-
+    /* Ignore the sig handler and kill the children. */
     act.sa_handler = SIG_IGN;
+    kill(c_pid[0], SIGTERM);
+    kill(c_pid[1], SIGTERM);
 
-    if(sigaction(SIGCHLD, &act, NULL) == -1)
-        perror("Client: Error setting SIGCHLD");
+    //Collect any remaining child processes for this client (bash and data relay):
+    while (waitpid(-1,NULL,WNOHANG) > 0);
+        
     return;
 }
 
 // Creates the master and slave pty.
-pid_t pty_open(int *master_fd, int client_fd) {
+pid_t open_pty(int *master_fd, int client_fd) {
     
     char * slavename;
     int pty_master, slave_fd, err;
@@ -281,12 +281,23 @@ int transfer_data(int from, int to)
 }
 
 // Collects processes.
-void sigchld_handler(int sig) {
-    wait(NULL);
+void sigchld_handler(int signal, siginfo_t *sip, void *ignore) {
 
-    kill(c_pid[0], sig);
-    kill(c_pid[1], sig);
-    exit(0);
+    //Terminate other child process:
+    if (sip->si_pid == c_pid[0]) {
+        DTRACE("%ld:SIGCHLD handler invoked due to PID:%d (bash), killing %d\n", (long)getpid(), sip->si_pid, c_pid[1]);
+        kill(c_pid[1], SIGTERM); 
+    } else {
+        DTRACE("%ld:SIGCHLD handler invoked due to PID:%d (socket-->PTY), killing %d\n", (long)getpid(), sip->si_pid, c_pid[0]);
+        kill(c_pid[0], SIGTERM); 
+    }
+
+    //Collect any/all killed child processes for this client:
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+
+    //Terminate the parent without returning since no point:
+    DTRACE("%ld:Terminating (client)...\n", (long)getpid());
+    _exit(EXIT_SUCCESS);
 }
 
 // Reads a messagr from a server and returns it as a string (null terminated).
