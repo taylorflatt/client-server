@@ -1,5 +1,12 @@
 language: c
 compiler: gcc
+before_install:
+  - chmod +x Lab1/buildTest.sh
+  - chmod +x Lab2/buildTest.sh
+  - chmod +x Lab3/buildTest.sh
+  - chmod +x Lab4/buildTest.sh
+  - chmod +x Lab5/buildTest.sh
+  
 jobs:
   include:
     - stage: Test
