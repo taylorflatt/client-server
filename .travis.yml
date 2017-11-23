@@ -17,4 +17,5 @@ jobs:
     - script: Lab4/buildTest.sh
     - script: Lab5/buildTest.sh
     - stage: Malicious Clients Test
+    - script: Lab5/buildTest.sh
     - script: Lab5/brokenTests.sh
