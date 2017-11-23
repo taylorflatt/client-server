@@ -50,8 +50,6 @@ make serverD
 
 In order to run or test with malfunctioning/malicious clients, run the makefile in the [Broken Clients](https://github.com/taylorflatt/client-server/tree/master/Lab3/BrokenClients) directory.
 
-In order to compile the broken clients run:
-
 ```
 make allclients
 ```
