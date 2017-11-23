@@ -10,8 +10,8 @@ before_install:
 jobs:
   include:
     - stage: Test
-      script: Lab1/buildTest.sh
-      script: Lab2/buildTest.sh
-      script: Lab3/buildTest.sh
-      script: Lab4/buildTest.sh
-      script: Lab5/buildTest.sh
+    - script: Lab1/buildTest.sh
+    - script: Lab2/buildTest.sh
+    - script: Lab3/buildTest.sh
+    - script: Lab4/buildTest.sh
+    - script: Lab5/buildTest.sh
