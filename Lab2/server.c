@@ -167,8 +167,6 @@ void create_processes(int client_fd) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Setting c_pid[0] to open_pty.\n");
-
     if((c_pid[0] = open_pty(&master_fd, client_fd)) == -1) {
         perror("(create_processes) open_pty(): Error setting up the pty for the client.");
         exit(EXIT_FAILURE);
@@ -226,8 +224,9 @@ pid_t open_pty(int *master_fd, int client_fd) {
         O_RDWR := Open pty for reading + writing. 
         O_NOCTTY := Don't make it a controlling terminal for the process. 
     */
-    if((pty_master = posix_openpt(O_RDWR|O_NOCTTY)) == -1)
+    if((pty_master = posix_openpt(O_RDWR|O_NOCTTY)) == -1) {
         return -1;
+    }
     
     /* Attempt to kickstart the master.
         Grantpt := Creates a child process that executes a set-user-ID-root program changing ownership of the slave 
@@ -246,9 +245,8 @@ pid_t open_pty(int *master_fd, int client_fd) {
     // Child
     pid_t c_pid;
     if((c_pid = fork()) == 0) {
-        printf("slavename = %s\n", slavename);
-        
-        // pty_master is not needed in the child, close it.
+
+        /* pty_master is not needed in the child, close it. */
         close(pty_master);
         close(client_fd);
 
@@ -261,8 +259,8 @@ pid_t open_pty(int *master_fd, int client_fd) {
             perror("(open_pty) open(): Error opening the slave_fd for RW IO.");
             return -1;
         }
+        DTRACE("%ld:PTY_MASTER=%i and PTY_SLAVE=%s.\n", (long)getppid(), pty_master, pty_slave);  
 
-        printf("Setting dup\n");
         if ((dup2(slave_fd, STDIN_FILENO) == -1) || (dup2(slave_fd, STDOUT_FILENO) == -1) || (dup2(slave_fd, STDERR_FILENO) == -1)) {
             perror("(open_pty) dup2(): Error redirecting in/out/error.");
             exit(EXIT_FAILURE); 
@@ -276,8 +274,6 @@ pid_t open_pty(int *master_fd, int client_fd) {
         /* Should never reach this point. */
         exit(EXIT_FAILURE);
     }
-
-    printf("slave pid = %d\n", (int)c_pid);
 
     * master_fd = pty_master;
     return c_pid;
