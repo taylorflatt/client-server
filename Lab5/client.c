@@ -60,7 +60,7 @@ int main(int argc, char *argv[]){
     
     /* Make sure the command-line arguments are in order. */
     if(argc != 2) {
-        fprintf(stderr, "\nIncorrect number of command line arguments!\n\n");
+        perror("Incorrect number of command line arguments!");
         printf("    Usage: %s SERVER_IP\n\n", argv[0]);
         exit(EXIT_FAILURE);
     } else {
@@ -330,13 +330,13 @@ int transfer_data(int from, int to) {
 
     while((nread = read(from, buf, MAX_LENGTH)) > 0) {
         if(write(to, buf, nread) == -1) {
-            fprintf(stderr, "Failed writing data.");
+            perror("(transfer_data) write(): Failed writing data!");
             break;
         }
     }
 
     if(nread == -1 && errno) {
-        fprintf(stderr, "Failed reading data.");
+        perror("(transfer_data) read(): Failed reading data!");
         return -1;
     }
 
