@@ -11,7 +11,7 @@ before_install:
 script: Lab1/buildTest.sh
 jobs:
   include:
-    - stage: Test
+    - stage: Compile Test
     - script: Lab1/buildTest.sh
     - script: Lab2/buildTest.sh
     - script: Lab3/buildTest.sh
@@ -19,5 +19,4 @@ jobs:
     - script: Lab5/buildTest.sh
     - script: Lab5/BrokenClients/buildTest.sh
     - stage: Malicious Clients Test
-    - script: Lab5/BrokenClients/buildTest.sh
     - script: Lab5/brokenTests.sh
