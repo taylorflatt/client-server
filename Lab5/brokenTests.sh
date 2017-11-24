@@ -69,13 +69,13 @@ fi
 
 if [ "$errors" -gt "0" ]; then
     echo "Failed one or more tests."
-    trap "exit" INT TERM
-    trap "kill 0" EXIT
+    #trap "exit" INT TERM
+    #trap "kill 1" EXIT
     exit 1
 else
     echo "Successfully passed all tests!"
-    trap "exit" INT TERM
-    trap "kill 0" EXIT
+    #trap "exit" INT TERM
+    #trap "kill 0" EXIT
     exit 0
 fi
 
