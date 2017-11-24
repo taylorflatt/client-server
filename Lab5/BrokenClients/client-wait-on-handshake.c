@@ -165,8 +165,9 @@ char *read_handshake_messages(int client_fd)
     if ((nread = read(client_fd, msg, MAX_LENGTH - 1)) <= 0) {
         if (errno)
             perror("Error reading from the client socket");
-        else
-            fprintf(stderr, "Client closed connection unexpectedly\n");
+        else {
+            exit(EXIT_SUCCESS); //TEST INFO HERE_____________________
+        }
             
         return NULL; 
     }

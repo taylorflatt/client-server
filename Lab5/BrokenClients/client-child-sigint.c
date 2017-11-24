@@ -291,6 +291,7 @@ void graceful_exit(int exit_status)
     DTRACE("%ld:Started exit procedure.\n",(long)getpid());
     restore_tty_settings();
 
+    exit(EXIT_SUCCESS);
     //Collect child and get its exit status:
     DTRACE("%ld:Cleaning up children.\n",(long)getpid());
     int childstatus;

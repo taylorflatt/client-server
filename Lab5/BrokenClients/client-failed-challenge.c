@@ -129,7 +129,7 @@ int handshake(int server_fd) {
     //  Verify the challenge against known result.
     if(strcmp(h_msg, CHALLENGE) != 0) {
         perror("Incorrect challenge received from the server");
-        return -1;
+        exit(EXIT_SUCCESS);
     }
 
     // Send secret to the server for verification.

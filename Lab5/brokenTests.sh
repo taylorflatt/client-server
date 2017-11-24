@@ -67,7 +67,7 @@ else
     ((errors++))
 fi
 
-if [ "$errors" -eq "0" ]; then
+if [ "$errors" -gt "0" ]; then
     echo "Failed one or more tests."
     trap "exit" INT TERM
     trap "kill 0" EXIT

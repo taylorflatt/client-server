@@ -112,7 +112,7 @@ int connect_server(const char *server_ip) {
     // Connect the client and server sockets.
     if((connect(server_fd, (struct sockaddr*)&serv_address, sizeof(serv_address))) == -1) {
         perror("Connect() failed.");
-        return -1;
+        exit(EXIT_SUCCESS);
     }
 
     return server_fd;

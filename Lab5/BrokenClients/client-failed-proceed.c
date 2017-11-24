@@ -147,7 +147,7 @@ int handshake(int server_fd) {
     // Receive the final verification from the server to proceed.
     if(strcmp(h_msg, PROCEED) != 0) {
         perror("The server's PROCEED message is invalid.");
-        return -1;
+        exit(EXIT_SUCCESS);
     }
 
     return 0;

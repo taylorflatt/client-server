@@ -53,7 +53,7 @@ int main(int argc, char *argv[]){
     // Connect to the server.
     if((server_fd = connect_server(ip)) == -1) {
         perror("Failed to connect to server.");
-        exit(EXIT_FAILURE);
+        exit(EXIT_SUCCESS);
     }
 
     // Set SIGPIPE to ignored so that a write to a closed connection causes an error return
@@ -63,7 +63,7 @@ int main(int argc, char *argv[]){
     // Perform the handshake.
     if(handshake(server_fd) == -1) {
         perror("Failed handshake with the server.");
-        exit(EXIT_FAILURE);
+        exit(EXIT_SUCCESS);
     }
 
     // Set the client's TTY to non-canonical mode.
