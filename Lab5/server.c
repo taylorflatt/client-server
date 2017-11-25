@@ -215,6 +215,7 @@ int create_server() {
 
     if(set_fd_to_nonblocking(listen_fd) == -1) {
         perror("(create_server) set_fd_to_nonblocking(): Error setting listen_fd to non-blocking.");
+        return -1;
     }
 
     /* Setup epoll for connection listener. */
