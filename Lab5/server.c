@@ -48,7 +48,7 @@
 #define PORT 4070
 #define MAX_LENGTH 4096
 #define MAX_NUM_CLIENTS 64000
-#define MAX_EVENTS 24
+#define MAX_EVENTS 2048
 #define SECRET "cs407rembash\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
@@ -184,6 +184,7 @@ int add_fd_to_epoll(int fd, int e_fd) {
  * Returns: An integer corresponding to server's file descriptor on success or failure -1.
 */
 int create_server() {
+    
     struct sockaddr_in server_address;
 
     if((listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -195,6 +196,7 @@ int create_server() {
     int i = 1;
     if(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i))) {
         perror("(create_server) setsockopt(): Error setting sockopt.");
+        close(listen_fd);
         return -1;
     }
 
@@ -205,22 +207,26 @@ int create_server() {
 
     if((bind(listen_fd, (struct sockaddr *) &server_address, sizeof(server_address))) == -1){
         perror("(create_server) bind(): Error assigning address to socket.");
+        close(listen_fd);
         return -1;
     }
 
     if((listen(listen_fd, 10)) == -1){
         perror("(create_server) listen(): Error listening to socket.");
+        close(listen_fd);
         return -1;
     }
 
     if(set_fd_to_nonblocking(listen_fd) == -1) {
         perror("(create_server) set_fd_to_nonblocking(): Error setting listen_fd to non-blocking.");
+        close(listen_fd);
         return -1;
     }
 
     /* Setup epoll for connection listener. */
     if(add_fd_to_epoll(listen_fd, epoll_fd)) {
         perror("(create_server) add_fd_to_epoll(): Failed to add listening_fd to epoll.");
+        close(listen_fd);
         return -1;
     }
 
@@ -606,7 +612,7 @@ void epoll_listener() {
 
     while(1) {
         //events = epoll_pwait(epoll_fd, ev_list, MAX_EVENTS, -1, 0);
-        events = epoll_wait(epoll_fd, ev_list, MAX_NUM_CLIENTS * 2, -1);
+        events = epoll_wait(epoll_fd, ev_list, MAX_EVENTS, -1);
 
         //DTRACE("%ld:Sees EVENTS=%d from FD=%d.\n", (long)getpid(), events, ev_list[0].data.fd);
 
