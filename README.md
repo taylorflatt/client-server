@@ -74,3 +74,11 @@ To run the script, simply cd into its directory and run:
 ```
 ./show-sockets
 ```
+
+## Future
+I plan on implementing a logger to record and report what happens during server runtime such as:
+- Server creation
+- Client connection
+- Client destruction
+- Client errors
+- Server errors
