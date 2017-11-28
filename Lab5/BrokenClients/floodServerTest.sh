@@ -67,7 +67,7 @@ function remove_error_file() {
 }
 
 if [[ ! -x client-no-tty-tester ]]; then
-    if make allclientsD; then 
+    if ! make allclientsD; then 
         echo "Error: Failed making client-no-tty-tester."
         exit 1
     fi
