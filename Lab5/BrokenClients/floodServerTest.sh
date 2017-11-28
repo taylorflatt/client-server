@@ -67,8 +67,15 @@ function remove_error_file() {
 }
 
 if [[ ! -x client-no-tty-tester ]]; then
-    echo "Error: must have client executable named: client-notty"
-    exit 1
+    if make allclientsD; then 
+        echo "Error: Failed making client-no-tty-tester."
+        exit 1
+    fi
+
+    if [[ ! -x client-no-tty-tester ]]; then
+        echo "Error: Must have a client named client-no-tty-tester."
+        exit 1
+    fi
 fi
 
 if ! lsof -i :4070 &> /dev/null; then

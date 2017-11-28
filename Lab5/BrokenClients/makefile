@@ -9,6 +9,7 @@ allclients:
 	gcc -Wall -o client-parent-sigquit client-parent-sigquit.c
 	gcc -Wall -o client-wait-on-connect client-wait-on-connect.c
 	gcc -Wall -o client-wait-on-handshake client-wait-on-handshake.c
+	gcc -Wall -o client-no-tty-tester client-no-tty-tester.c
 
 allclientsD:
 	gcc -Wall -DDEBUG -o client-child-sigint client-child-sigint.c
@@ -21,6 +22,7 @@ allclientsD:
 	gcc -Wall -DDEBUG -o client-parent-sigquit client-parent-sigquit.c
 	gcc -Wall -DDEBUG -o client-wait-on-connect client-wait-on-connect.c
 	gcc -Wall -DDEBUG -o client-wait-on-handshake client-wait-on-handshake.c
+	gcc -Wall -DDEBUG -o client-no-tty-tester client-no-tty-tester.c
 
 server:
 	gcc -Wall -pthread -lrt -o server ../server.c
