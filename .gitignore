@@ -82,3 +82,5 @@ Lab5/BrokenClients/client-parent-sigquit
 Lab5/BrokenClients/client-parent-sigint
 Lab5/BrokenClients/client-wait-on-connect
 Lab5/BrokenClients/client-wait-on-handshake
+Lab5/BrokenClients/client-no-tty-tester
+Lab5/BrokenClients/testerrors
