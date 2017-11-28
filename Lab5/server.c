@@ -321,30 +321,34 @@ void client_connect() {
 
     int client_fd;
 
-    if((client_fd = accept(listen_fd, (struct sockaddr *) NULL, NULL)) == -1 && errno != EAGAIN) {
+    /* Accept the clients in a while loop since there may be more than one (required for edge triggered). */
+    while((client_fd = accept(listen_fd, (struct sockaddr *) NULL, NULL)) != -1) {
+
+        if(client_fd == -1) {
+            perror("(client_connect): Invalid client_fd = -1 has been discovered. Failed to client accept.");
+            return;
+        }
+
+        if(client_fd >= MAX_NUM_CLIENTS * 2 + 5) {
+            perror("(client_connect): The max number of clients for the server has been reached. Client is unable to register with the server.");
+            close(client_fd);
+            return;
+        }
+
+        if(register_client(client_fd)) {
+            perror("(client_connect) register_client(): Failed to register the client with the server.");
+            graceful_exit(client_fd);
+        }
+
+        if(initiate_handshake(client_fd)) {
+            perror("(client_connect) initiate_handshake(): Failed to initiate the handshake with the client.");
+            graceful_exit(client_fd);
+        }
+    }
+
+    if(errno != EAGAIN) {
         perror("(client_connect) accept(): Error making a connection with the client.");
         return;
-    }
-
-    if(client_fd == -1) {
-        perror("(client_connect): Invalid client_fd = -1 has been discovered. Failed to client accept.");
-        return;
-    }
-
-    if(client_fd >= MAX_NUM_CLIENTS * 2 + 5) {
-        perror("(client_connect): The max number of clients for the server has been reached. Client is unable to register with the server.");
-        close(client_fd);
-        return;
-    }
-
-    if(register_client(client_fd)) {
-        perror("(client_connect) register_client(): Failed to register the client with the server.");
-        graceful_exit(client_fd);
-    }
-
-    if(initiate_handshake(client_fd)) {
-        perror("(client_connect) initiate_handshake(): Failed to initiate the handshake with the client.");
-        graceful_exit(client_fd);
     }
 }
 
