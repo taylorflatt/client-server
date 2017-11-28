@@ -2,10 +2,10 @@ client:
 	gcc -Wall -o client client.c
 
 server:
-	gcc -Wall -pthread -lrt -o server server.c
+	gcc -Wall -pthread -std=gnu99 -o server server.c tpool.c -lrt
 
 clientD:
 	gcc -Wall -DDEBUG -o client client.c
 
 serverD:
-	gcc -Wall -pthread -DDEBUG -std=gnu99 -lrt  -o server server.c tpool.c
+	gcc -Wall -pthread -DDEBUG -std=gnu99  -o server server.c tpool.c -lrt
