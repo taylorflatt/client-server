@@ -24,9 +24,12 @@ END_COLOR=`tput sgr0`
 clientcommands=$'pwd\ncd\npwd\nls -l'
 
 if [[ $# != 2 ]]; then
-    echo "testserver NUM100CLIENTS NUMCYCLES"
+    echo "flood_server_test NUM100CLIENTS NUMCYCLES"
     exit 1
 fi
+
+# Move into the testing directory.
+cd Testing
 
 scriptdir=$(dirname "$0")
 nclients=$1
@@ -83,7 +86,7 @@ if ! make lab5server; then
     exit 1
 fi
 
-if ! ./server; then
+if ! ./server &; then
     echo "Error: Unable to start the server."
     exit 1
 fi
