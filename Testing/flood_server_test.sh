@@ -85,16 +85,13 @@ if ! make nottyserver; then
     exit 1
 fi
 
-if lsof -i :4070 &> /dev/null; then
-    echo "Error: Server is already running! It must be killed before this can be started."
-    exit 1
-fi
-
 # Run the server and capture its PID so it can be killed later.
 ./server 2>> testerrors &
 serverpid=$!
 
-if ! lsof -i :4070 &> /dev/null; then
+if lsof -i :4070 &> /dev/null; then
+    echo "Server is running!"
+else
     echo "Error: server does not seem to be running"
     exit 1
 fi

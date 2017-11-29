@@ -120,6 +120,8 @@ echo "Done Testing!"
 if [[ -s testerrors ]]; then
     echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
     kill $serverpid
+    # For travis-ci
+    cat testerrors
     exit 1
 else
     echo "${GREEN}Successfully passed all testing with $(($nclients * $bsize)) clients each executing $ncycles cycles!${END_COLOR}"
