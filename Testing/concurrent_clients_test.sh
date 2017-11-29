@@ -68,20 +68,16 @@ function remove_error_file() {
     return 0
 }
 
-if [[ ! -x client-no-tty-tester ]]; then
-    if ! make nottyclient; then 
-        echo "Error: Failed making client-no-tty-tester."
-        exit 1
-    fi
+if [[ -e client-no-tty-tester ]]; then
 
-    if [[ ! -x client-no-tty-tester ]]; then
-        echo "Error: Must have a client named client-no-tty-tester."
+    if ! rm -f client-no-tty-tester; then
+        echo "Failed to remove old version of the client."
         exit 1
     fi
 fi
 
-if ! make nottyserver; then
-    echo "Error: Unable to make the newest server version"
+if ! make nottyclient; then 
+    echo "Error: Failed making client-no-tty-tester."
     exit 1
 fi
 
