@@ -21,10 +21,10 @@ END_COLOR=`tput sgr0`
 
 # Sequence of commands to be sent to server:
 # (Separate each command line with \n, exit automatically sent at end.)
-clientcommands=$'pwd\n'
+clientcommands=$'pwd\ncd\npwd\nls -l'
 
-if [[ $# != 1 ]]; then
-    echo "flood_server_test NUMCLIENTS"
+if [[ $# != 2 ]]; then
+    echo "flood_server_test NUM100CLIENTS NUMCYCLES"
     exit 1
 fi
 
@@ -33,6 +33,7 @@ cd Testing
 
 scriptdir=$(dirname "$0")
 nclients=$1
+ncycles=$2
 bsize=100
 
 function clientscript()
@@ -85,13 +86,7 @@ if ! make lab5server; then
     exit 1
 fi
 
-if lsof -i :4070 &> /dev/null; then
-    echo "Error: Server is already running! It must be killed before this can be started."
-    exit 1
-fi
-
-# Run the server and capture its PID so it can be killed later.
-./server5 2>> testerrors &
+./server5 &
 serverpid=$!
 
 if ! lsof -i :4070 &> /dev/null; then
@@ -101,18 +96,21 @@ fi
 
 remove_error_file
 
-# Run specified number of clients against server and drop client output.:
+# Run specified number of clients against server:
 for (( i=1; i<="$nclients"; i++ )); do
-    echo "($i/$nclients) Adding client and running commands..."
-    clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null &
-    #sleep 1
+    for (( j=1; j<=$bsize; j++)); do 
+        clientscript "$ncycles" | "$scriptdir"/client-no-tty-tester 127.0.0.1 2>> testerrors &
+    done
+    sleep 1
 done
+
+# Waits for all children to close prior to exiting. If the 
+# script hangs, then all children aren't finishing/exiting.
+# That would be an error.
+wait
 
 echo "Done Testing!"
 
-# Some errors may be output during the kill/killall but these are fine. So long as no errors 
-# were encountered during the runtime of flooding the server with clients, things are working 
-# fine.
 if [[ -s testerrors ]]; then
     echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
     killall client-no-tty-tester
