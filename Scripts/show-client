@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Version 0.1
+# Author: Norman Carver
+# Script which will display any client processes with the name client.
+#
+# Usage: show-client
+
 if [[ $# != 0 ]]; then
     echo "Usage show-client"
     exit 1

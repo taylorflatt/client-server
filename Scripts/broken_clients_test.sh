@@ -1,14 +1,18 @@
 #!/bin/bash
 
-# Make and start the server.
-cd Lab5 && make serverD
-./server &
-
 ip="127.0.0.1"
 errors=0
 
+
+if ! lsof -i :4070 &> /dev/null; then
+    echo "Error: server does not seem to be running"
+    exit 1
+else
+    echo "Server running..."
+fi
+
 # Make the clients.
-cd BrokenClients && make allclientsD 
+make brokenclients
 
 # Run the tests.
 if ./client-wait-on-handshake $ip; then

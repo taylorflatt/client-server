@@ -1,7 +1,14 @@
 #!/bin/bash
 
+# Version 0.1
+# Author: Norman Carver
+# Script which will display any server processes with the name server.
+#
+# Usage: show-server
+
+
 if [[ $# != 0 ]]; then
-    echo "Usage show-client"
+    echo "Usage show-server"
     exit 1
 fi
 
@@ -22,20 +29,20 @@ function get_descendents()
 }
 
 
-client=$(ps -C client -o pid= | head -n1)
+server=$(ps -C server -o pid= | head -n1)
 
-if [[ -z $client ]]; then
-    echo "No client process!"
+if [[ -z $server ]]; then
+    echo "No server process!"
     exit 1
 fi
 
-descendents=$(get_descendents $client)
+descendents=$(get_descendents $server)
 
-echo "Client processes and threads:"
+echo "Server processes and threads:"
 ps -L -o pid,tid,ppid,stat,comm $server $descendents
 echo
 
-for p in $client $descendents; do
+for p in $server $descendents; do
     /usr/bin/lsof -a -R -d '^cwd,^txt,^mem,^rtd' -p $p
 done
 

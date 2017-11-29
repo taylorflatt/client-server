@@ -24,11 +24,10 @@ END_COLOR=`tput sgr0`
 clientcommands=$'pwd\ncd\npwd\nls -l'
 
 if [[ $# != 2 ]]; then
-    echo "testserver NUM100CLIENTS NUMCYCLES"
+    echo "flood_server_test NUM100CLIENTS NUMCYCLES"
     exit 1
 fi
 
-scriptdir=$(dirname "$0")
 nclients=$1
 ncycles=$2
 bsize=100
@@ -56,7 +55,7 @@ function clientscript()
 
 function remove_error_file() {
 
-    if [[ -x testerrors ]]; then
+    if [[ -e testerrors ]]; then
         if ! rm -f testerrors; then
             echo "Failed to remove any previous testerrors files! Manually remove the file to continue."
             return -1
@@ -66,31 +65,33 @@ function remove_error_file() {
     return 0
 }
 
-if [[ ! -x client-no-tty-tester ]]; then
-    if ! gcc -Wall client-no-tty-tester.c -o client-no-tty-tester; then 
-        echo "Error: Failed compiling client-no-tty-tester."
-        exit 1
-    fi
-
-    if [[ ! -x client-no-tty-tester ]]; then
-        echo "Error: Must have a client named client-no-tty-tester."
+if [[ -e client-no-tty-tester ]]; then
+    if ! rm -f client-no-tty-tester; then
+        echo "Failed to remove old version of the client."
         exit 1
     fi
 fi
 
-if ! lsof -i :4070 &> /dev/null; then
+if ! make nottyclient; then 
+    echo "Error: Failed making client-no-tty-tester."
+    exit 1
+fi
+
+if lsof -i :4070 &> /dev/null; then
+    echo "Server is running!"
+else
     echo "Error: server does not seem to be running"
     exit 1
 fi
 
-if [[ remove_error_file -ne 0 ]]; then
-    exit 1
-fi
+remove_error_file
+
+echo "Running client tests."
 
 # Run specified number of clients against server:
 for (( i=1; i<="$nclients"; i++ )); do
     for (( j=1; j<=$bsize; j++)); do 
-        clientscript "$ncycles" | "$scriptdir"/client-no-tty-tester 127.0.0.1 2>> testerrors &
+        clientscript "$ncycles" | ./client-no-tty-tester 127.0.0.1 2>> testerrors 1> /dev/null &
     done
     sleep 1
 done
@@ -104,10 +105,12 @@ echo "Done Testing!"
 
 if [[ -s testerrors ]]; then
     echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
+    kill $serverpid
     exit 1
 else
     echo "${GREEN}Successfully passed all testing with $(($nclients * $bsize)) clients each executing $ncycles cycles!${END_COLOR}"
     remove_error_file
+    kill $serverpid
     exit 0
 fi
 
