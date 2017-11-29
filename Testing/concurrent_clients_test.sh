@@ -31,7 +31,6 @@ fi
 # Move into the testing directory.
 cd Testing
 
-scriptdir=$(dirname "$0")
 nclients=$1
 ncycles=$2
 bsize=10
@@ -105,7 +104,7 @@ remove_error_file
 # Run specified number of clients against server:
 for (( i=1; i<="$nclients"; i++ )); do
     for (( j=1; j<=$bsize; j++)); do 
-        clientscript "$ncycles" | "$scriptdir"/client-no-tty-tester 127.0.0.1 2>> testerrors &
+        clientscript "$ncycles" | ./client-no-tty-tester 127.0.0.1 2>> testerrors &
     done
     sleep 1
 done
@@ -120,7 +119,7 @@ echo "Done Testing!"
 if [[ -s testerrors ]]; then
     echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
     kill $serverpid
-    # For travis-ci
+    # See the output/errors.
     cat testerrors
     exit 1
 else
