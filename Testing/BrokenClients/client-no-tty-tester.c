@@ -311,21 +311,16 @@ int transfer_data(int from, int to) {
 void graceful_exit(int exit_status)
 {
     int childstatus;
-    DTRACE("%ld:Started exit procedure.\n", (long)getpid());
 
     /* Collect any children and get their exit statuses. */
-    DTRACE("%ld:Cleaning up children.\n", (long)getpid());
     wait(&childstatus);
 
     if(!WIFEXITED(childstatus) || WEXITSTATUS(childstatus) != EXIT_SUCCESS) {
-        DTRACE("%ld:Error cleaning up children.\n", (long)getpid());
         exit(EXIT_FAILURE);
     }
 
     if (exit_status == EXIT_FAILURE)
         exit(EXIT_FAILURE);
-
-    DTRACE("%ld:Successfully cleaned up children. Exiting...\n", (long)getpid());
 
     exit(EXIT_SUCCESS);
 }

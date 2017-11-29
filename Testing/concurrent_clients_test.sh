@@ -101,10 +101,12 @@ fi
 
 remove_error_file
 
+echo "Running client tests."
+
 # Run specified number of clients against server:
 for (( i=1; i<="$nclients"; i++ )); do
     for (( j=1; j<=$bsize; j++)); do 
-        clientscript "$ncycles" | ./client-no-tty-tester 127.0.0.1 2>> testerrors &
+        clientscript "$ncycles" | ./client-no-tty-tester 127.0.0.1 2>> testerrors 1> /dev/null &
     done
     sleep 1
 done
