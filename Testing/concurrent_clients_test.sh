@@ -82,18 +82,13 @@ if ! make nottyclient; then
 fi
 
 # Start the server and get rid of the output.
-./server &> /dev/null & 
+./server 1> /dev/null & 
 
 # Store the PID so it can be killed later. Then disinherit the child so the 
 # script doesn't sit on the wait call for the server. We can use the pid to 
 # kill the server later.
 serverpid=${!}
 disown $serverpid
-
-if ! lsof -i :4070 &> /dev/null; then
-    echo "Error: server does not seem to be running"
-    exit 1
-fi
 
 remove_error_file
 
