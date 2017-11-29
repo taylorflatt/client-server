@@ -86,10 +86,7 @@ if ! make lab5server; then
     exit 1
 fi
 
-if ! ./server &; then
-    echo "Error: Unable to start the server."
-    exit 1
-fi
+./server &
 
 if ! lsof -i :4070 &> /dev/null; then
     echo "Error: server does not seem to be running"

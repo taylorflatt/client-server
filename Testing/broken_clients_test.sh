@@ -5,7 +5,14 @@ errors=0
 
 # Make and start the server.
 cd Testing && make lab5server
-./server &
+./server5 &
+
+if ! lsof -i :4070 &> /dev/null; then
+    echo "Error: server does not seem to be running"
+    exit 1
+else
+    echo "Server running..."
+fi
 
 # Make the clients.
 make brokenclients
