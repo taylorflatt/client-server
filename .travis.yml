@@ -25,4 +25,4 @@ jobs:
     - script: Testing/broken_clients_test.sh
     - stage: Stress Testing
     - script: Testing/flood_server_test.sh 1000
-    - script: Testing/concurrent_clients_test.sh 100 5
+    - script: Testing/concurrent_clients_test.sh 10 5
