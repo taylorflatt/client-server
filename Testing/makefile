@@ -38,5 +38,8 @@ brokenclients:
 	gcc -Wall -DDEBUG -o client-wait-on-handshake BrokenClients/client-wait-on-handshake.c
 	gcc -Wall -DDEBUG -o client-no-tty-tester BrokenClients/client-no-tty-tester.c
 
-notty:
-	gcc -Wall -DDEBUG -o client-no-tty-tester BrokenClients/client-no-tty-tester.c
+nottyserver:
+	gcc -Wall -pthread -std=gnu99  -o server ../Lab5/server.c ../Lab5/tpool.c -lrt
+
+nottyclient:
+	gcc -Wall -o client-no-tty-tester BrokenClients/client-no-tty-tester.c

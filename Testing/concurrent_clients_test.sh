@@ -34,7 +34,7 @@ cd Testing
 scriptdir=$(dirname "$0")
 nclients=$1
 ncycles=$2
-bsize=100
+bsize=10
 
 function clientscript()
 {
@@ -70,7 +70,7 @@ function remove_error_file() {
 }
 
 if [[ ! -x client-no-tty-tester ]]; then
-    if ! make notty; then 
+    if ! make nottyclient; then 
         echo "Error: Failed making client-no-tty-tester."
         exit 1
     fi
@@ -81,13 +81,19 @@ if [[ ! -x client-no-tty-tester ]]; then
     fi
 fi
 
-if ! make lab5server; then
+if ! make nottyserver; then
     echo "Error: Unable to make the newest server version"
     exit 1
 fi
 
-./server5 &
-serverpid=$!
+# Start the server and get rid of the output.
+./server &> /dev/null & 
+
+# Store the PID so it can be killed later. Then disinherit the child so the 
+# script doesn't sit on the wait call for the server. We can use the pid to 
+# kill the server later.
+serverpid=${!}
+disown $serverpid
 
 if ! lsof -i :4070 &> /dev/null; then
     echo "Error: server does not seem to be running"
@@ -113,13 +119,11 @@ echo "Done Testing!"
 
 if [[ -s testerrors ]]; then
     echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
-    killall client-no-tty-tester
     kill $serverpid
     exit 1
 else
     echo "${GREEN}Successfully passed all testing with $(($nclients * $bsize)) clients each executing $ncycles cycles!${END_COLOR}"
     remove_error_file
-    killall client-no-tty-tester
     kill $serverpid
     exit 0
 fi

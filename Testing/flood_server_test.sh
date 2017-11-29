@@ -69,7 +69,7 @@ function remove_error_file() {
 }
 
 if [[ ! -x client-no-tty-tester ]]; then
-    if ! make notty; then 
+    if ! make nottyclient; then 
         echo "Error: Failed making client-no-tty-tester."
         exit 1
     fi
@@ -80,7 +80,7 @@ if [[ ! -x client-no-tty-tester ]]; then
     fi
 fi
 
-if ! make lab5server; then
+if ! make nottyserver; then
     echo "Error: Unable to make the newest server version"
     exit 1
 fi
@@ -91,7 +91,7 @@ if lsof -i :4070 &> /dev/null; then
 fi
 
 # Run the server and capture its PID so it can be killed later.
-./server5 2>> testerrors &
+./server 2>> testerrors &
 serverpid=$!
 
 if ! lsof -i :4070 &> /dev/null; then
