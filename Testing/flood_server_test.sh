@@ -86,7 +86,7 @@ if ! make lab5server; then
     exit 1
 fi
 
-./server &
+./server5 &
 
 if ! lsof -i :4070 &> /dev/null; then
     echo "Error: server does not seem to be running"
