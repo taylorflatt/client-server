@@ -22,7 +22,7 @@ function get_descendents()
 }
 
 
-server=$(ps -C server -o pid= | head -n1)
+server=$(ps -C server5 -o pid= | head -n1)
 
 if [[ -z $server ]]; then
     echo "No server process!"

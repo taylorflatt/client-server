@@ -84,3 +84,6 @@ Lab5/BrokenClients/client-wait-on-connect
 Lab5/BrokenClients/client-wait-on-handshake
 Lab5/BrokenClients/client-no-tty-tester
 Lab5/BrokenClients/testerrors
+Testing/server
+Testing/testerrors
+Testing/client-no-tty-tester
