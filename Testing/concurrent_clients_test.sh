@@ -81,6 +81,11 @@ if ! make nottyclient; then
     exit 1
 fi
 
+if ! make nottyserver; then
+    echo "Error: Unable to make the newest server version"
+    exit 1
+fi
+
 # Start the server and get rid of the output.
 ./server 1> /dev/null & 
 
@@ -89,6 +94,13 @@ fi
 # kill the server later.
 serverpid=${!}
 disown $serverpid
+
+if lsof -i :4070 &> /dev/null; then
+    echo "Server is running!"
+else
+    echo "Error: server does not seem to be running"
+    exit 1
+fi
 
 remove_error_file
 
