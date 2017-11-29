@@ -17,8 +17,8 @@ lab3server:
 	gcc -Wall -pthread -DDEBUG  -o ~/Tests/server3 ../Lab3/server.c -lrt
 
 lab4tpool:
-	gcc -c -std=gnu99 ../Lab4/tpool.c && ar -cr libtpool.a tpool.o
-	gcc -Wall -DDEBUG -std=gnu99 -fpic -c ../Lab4/tpool.c && gcc -shared -o ~/Tests/libtpool.so ../Lab5/tpool.o
+	gcc -c -std=gnu99 ../Lab4/tpool.c -o ../Lab4/tpool.o && ar -cr libtpool.a ../Lab4/tpool.o
+	gcc -Wall -DDEBUG -std=gnu99 -fpic -c ../Lab4/tpool.c && gcc -shared -o ~/Tests/libtpool.so ../Lab4/tpool.o
 
 lab5client:
 	gcc -Wall -DDEBUG -o ~/Tests/client5 ../Lab5/client.c
