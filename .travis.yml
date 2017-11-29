@@ -9,10 +9,6 @@ before_install:
   - chmod +x Testing/build_lab4_test.sh
   - chmod +x Testing/build_lab5_test.sh
   - chmod +x Testing/floodServerTest.sh
-before_cache: Testing/initial_setup
-cache:
-  directories:
-    - ~/Tests
 script: skip
 jobs:
   include:

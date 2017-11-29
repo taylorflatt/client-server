@@ -66,6 +66,28 @@ function remove_error_file() {
     return 0
 }
 
+if [[ ! -x client-no-tty-tester ]]; then
+    if ! make notty; then 
+        echo "Error: Failed making client-no-tty-tester."
+        exit 1
+    fi
+
+    if [[ ! -x client-no-tty-tester ]]; then
+        echo "Error: Must have a client named client-no-tty-tester."
+        exit 1
+    fi
+fi
+
+if ! make lab5server; then
+    echo "Error: Unable to make the newest server version"
+    exit 1
+fi
+
+if ! ./server; then
+    echo "Error: Unable to start the server."
+    exit 1
+fi
+
 if ! lsof -i :4070 &> /dev/null; then
     echo "Error: server does not seem to be running"
     exit 1
