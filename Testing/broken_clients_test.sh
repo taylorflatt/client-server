@@ -1,9 +1,5 @@
 #!/bin/bash
 
-# Make and start the server.
-cd Lab5 && make serverD
-./server &
-
 ip="127.0.0.1"
 errors=0
 
@@ -12,7 +8,7 @@ cd Testing && make lab5server
 ./server &
 
 # Make the clients.
-make brokenclients 
+make brokenclients
 
 # Run the tests.
 if ./client-wait-on-handshake $ip; then
