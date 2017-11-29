@@ -13,4 +13,7 @@ if ! make lab2server; then
     exit 1
 fi
 
+# TESTING
+ls
+
 exit 0

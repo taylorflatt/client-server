@@ -5,3 +5,6 @@ mkdir -p ~/Tests
 
 # Move into the testing directory so everything is local.
 cd Testing
+
+# TESTING
+ls

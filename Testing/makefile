@@ -24,7 +24,7 @@ lab5client:
 	gcc -Wall -DDEBUG -o ~/Tests/client5 ../Lab5/client.c
 
 lab5server:
-	gcc -Wall -pthread -DDEBUG -std=gnu99  -o ~/Tests/server5 ../Lab5/server.c tpool.c -lrt
+	gcc -Wall -pthread -DDEBUG -std=gnu99  -o ~/Tests/server5 ../Lab5/server.c ../Lab5/tpool.c -lrt
 
 brokenclients:
 	gcc -Wall -DDEBUG -o ~/Tests/client-child-sigint BrokenClients/client-child-sigint.c

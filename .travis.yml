@@ -13,6 +13,7 @@ before_cache: Testing/initial_setup
 cache:
   directories:
     - ~/Tests
+script: skip
 jobs:
   include:
     - stage: Compile Test
