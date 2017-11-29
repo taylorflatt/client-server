@@ -9,7 +9,7 @@ before_install:
   - chmod +x Testing/build_lab4_test.sh
   - chmod +x Testing/build_lab5_test.sh
   - chmod +x Testing/broken_clients_test.sh
-  - chmod +x Testing/floodServerTest.sh
+  - chmod +x Testing/flood_server_test.sh
 script: skip
 jobs:
   include:
@@ -23,4 +23,4 @@ jobs:
     - stage: Malicious Clients Test
     - script: Testing/broken_clients_test.sh
     - stage: Stress Testing
-    - script: Testing/floodServerTest.sh 100 10
+    - script: Testing/flood_server_test.sh 100 10
