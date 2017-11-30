@@ -7,6 +7,7 @@ These scripts can be used to test different functionality for the clients and se
 The makefile included should accompany the concurrent_clients_test, otherwise, substitute gcc commands in for the make command.
 
 ## Usage
+Short note about the broken clients. When they are required, they are referenced as being in the _same_ directory as the script that is running. Hence, it is important to have them in the same directory or you will have issues.
 
 ### Broken Clients Test
 The script tests all of the broken clients in the BrokenClients directory by running them against an existing server. The script will attempt to make the files with ```make brokenclients```. Be sure to have a makefile in the same directory as the script with the correct syntax (depending on where you placed the broken clients).
