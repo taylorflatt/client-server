@@ -17,7 +17,7 @@
 
 function print_usage()
 {
-	echo "Usage: $0 -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-l]"
+	echo -e "\nUsage: $0 -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-l]\n"
 }
 
 # Font colors for error/success messages.
@@ -36,8 +36,8 @@ scriptdir=$(dirname "$0")           # Get the directory the script is located in
 linewriting=0                       # Flag as to whether single line writing is on.
 nbclientsrun=0                      # Number of bad clients that have been created.
 ngclientsrun=0                      # Number of good clients that have been created.
-ngclients=                          # Number of good clients.
-nbclients=                          # Number of bad clients.
+ngclients=                          
+nbclients=                          
 
 # Create an array to hold all of the broken client file names.
 declare -a client_list
@@ -54,13 +54,12 @@ client_list+=("client-wait-on-handshake")
 while getopts ":g::b:l" opt; do
 	case $opt in
     g)
-		ngclients=$OPTARG
+		ngclients=$OPTARG       # Number of good clients.
 		;;
     b)
-		nbclients=$OPTARG
+		nbclients=$OPTARG       # Number of bad clients.
 		;;
 	l)
-        echo "Setting line writing option!"
 		linewriting=1
 		;;
 	?)
@@ -73,13 +72,18 @@ done
 nclients=$((ngclients + nbclients)) # Number of total clients.
 bclientsleft=$nbclients             # Number of bad clients yet to be created.
 
+# Make sure that the number of good and bad clients are set. This uses variable expansion 
+# which will overwrite the variable ngclients if it is set, otherwise it evaluates to nothingness
+# if ngclients is not set.
 if [[ -z ${ngclients+x} ]]; then
-    echo "Error: Please specify the number of good clients!"
+    echo -e "\nError: Please specify the number of good clients!"
+    print_usage
     exit 1
 fi
 
 if [[ -z ${nbclients+x} ]]; then
-    echo "Error: Please specify the number of bad clients!"
+    echo -e "\nError: Please specify the number of bad clients!"
+    print_usage
     exit 1
 fi
 
@@ -154,6 +158,7 @@ echo "--------------------------------"
 echo "Number of clients = $nclients"
 echo "Number of working clients = $ngclients"
 echo "Number of broken clients = $ngclients"
+echo "Commands to be run:" $clientcommands
 echo "--------------------------------"
 
 echo -e "\nBeginning the server flood...\n";
