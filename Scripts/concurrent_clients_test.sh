@@ -105,7 +105,7 @@ echo -e "\nBeginning client tests...\n";
 for (( i=1; i<="$nclients"; i++ )); do
     echo "Processing batch $i"
     for (( j=1; j<=$bsize; j++)); do 
-        (($client++))   # Update to the current client.
+        ((client++))   # Update to the current client.
 
         clientscript "$ncycles" $client | ./client-no-tty-tester 127.0.0.1 2>> testerrors 1> /dev/null &
         
