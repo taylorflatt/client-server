@@ -20,13 +20,34 @@ function print_usage()
 	echo -e "\nUsage: $0 -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-l]\n"
 }
 
+# Displays the help information to a user.
+function print_help()
+{
+	print_usage
+	echo -e "Joins g-good_clients and b-bad_clients to a server and waits until all children are collected to complete. \n"
+	
+	echo -e "\t -g NUM_GOOD_CLIENTS \t The number of good clients who will be created."
+	echo -e "\t -b NUM_BAD_CLIENTS \t\t The number of bad clients who will be created."
+    echo -e "\t -l \t\t\t Enables line rewriting so the terminal isn't saturated with the client creation information."
+    echo -e "\t -h \t\t\t Prints this help message. \n"
+	
+	echo "Note:"
+	echo -e "-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
+	
+	echo "Example:"
+	echo -e "\t./flood_server_hybrid_test -g 100 -b 50 \n"
+	echo -e "\tWill create 100 good clients and 50 bad clients totalling 150 clients connecting them to a server rapidly.\n"
+	
+	echo -e "Full documentation and source code can be found at: <www.github.com/taylorflatt/client-server>.\n"
+}
+
 # Font colors for error/success messages.
 RED=`tput setaf 1`
 GREEN=`tput setaf 2`
 END_COLOR=`tput sgr0`
 
 # Check arguments.
-if [[ $# < 2 || $# > 5 ]]; then
+if [[ $# < 2 || $# > 6 ]]; then
     print_usage
     exit 1
 fi
@@ -35,9 +56,7 @@ clientcommands=$'pwd\nexit'         # Sequence of commands to be sent to server.
 scriptdir=$(dirname "$0")           # Get the directory the script is located in.
 linewriting=0                       # Flag as to whether single line writing is on.
 nbclientsrun=0                      # Number of bad clients that have been created.
-ngclientsrun=0                      # Number of good clients that have been created.
-ngclients=                          
-nbclients=                          
+ngclientsrun=0                      # Number of good clients that have been created.                     
 
 # Create an array to hold all of the broken client file names.
 declare -a client_list
@@ -51,7 +70,7 @@ client_list+=("client-wait-on-connect")
 client_list+=("client-wait-on-handshake")
 
 # Parse the arguments.
-while getopts ":g::b:l" opt; do
+while getopts ":g::b:lh" opt; do
 	case $opt in
     g)
 		ngclients=$OPTARG       # Number of good clients.
@@ -61,6 +80,10 @@ while getopts ":g::b:l" opt; do
 		;;
 	l)
 		linewriting=1
+		;;
+    h)
+		print_help
+        exit 0
 		;;
 	?)
 		print_usage
@@ -120,28 +143,33 @@ function remove_error_file() {
     return 0
 }
 
-# This make code can be removed if you don't want it to make the client tty.
-if [[ ! -x client-no-tty-tester ]]; then
+# Verify the existance of all of the broken clients, if one doesn't exist, try to make them all.
+for ((i=0,j=1; i<${#client_list[@]} && j<=2; i++)); do
+    if [[ ! -x ${client_list[$i]} ]]; then
 
-    echo -e "\nMaking the client tester..."
+        # If this is the second time checking for the broken clients, then just error out.
+        if [[ j -eq 2 ]]; then
+            echo "${RED}Error: Failed making broken clients and ${client_list[$i]} still doesn't exist!${END_COLOR}"
+            exit 1
+        fi
 
-    if ! make nottyclient; then 
-        echo "Error: Failed making client-no-tty-tester."
-        exit 1
+        if [[ ! -e makefile ]]; then
+            echo "${RED}Error: ${client_list[$i]} doesn't exist and there isn't a makefile to try and make it.${END_COLOR}"
+            exit 1
+        fi
+
+        echo "Attempting to make the broken clients..."
+
+        if ! make brokenclients; then
+            echo "${RED}Error: Failed making broken clients.${END_COLOR}"
+            exit 1
+        fi
+
+        # Reset the variables to check if all the files exist one more time. 
+        i=0
+        ((j++))
     fi
-
-    if [[ ! -x client-no-tty-tester ]]; then
-        echo "Error: Must have a client named client-no-tty-tester."
-        exit 1
-    fi
-fi
-
-echo -e "\nMaking the broken clients..."
-
-if ! make brokenclients; then
-    echo "Error: Failed making broken clients."
-    exit 1
-fi
+done
 # End client tty make code
 
 if lsof -i :4070 &> /dev/null; then
