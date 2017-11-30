@@ -55,11 +55,9 @@ while getopts ":g::b:l" opt; do
 	case $opt in
     g)
 		ngclients=$OPTARG
-        echo "ngclients was set to: $OPTARG"
 		;;
     b)
 		nbclients=$OPTARG
-        echo "nbclients was set to: $OPTARG"
 		;;
 	l)
         echo "Setting line writing option!"
@@ -149,6 +147,8 @@ remove_error_file
 echo -e "\nTest Parameters:"
 echo "--------------------------------"
 echo "Number of clients = $nclients"
+echo "Number of working clients = $ngclients"
+echo "Number of broken clients = $ngclients"
 echo "--------------------------------"
 
 echo -e "\nBeginning the server flood...\n";
