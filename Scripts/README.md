@@ -27,13 +27,15 @@ The script has a documented portion of code which can be removed that will skip 
 ### Concurrent Clients Test
 The script will test batches of clients against the server by connecting them quickly and running some basic commands to verify multiple clients can connect and simultaneous IO can occur. Finally, the script will wait until all of the clients are collected before exiting.
 
-The script takes two arguments:
-- _NUM_BATCHES_: The number of batches of 100 clients that will be created to run on the server.
-- _NUM_CYCLES_: The number of types the sequence of commands will be run by each client.
+The script can take multiple arguments:
+- -n _NUM_BATCHES_: The number of batches of 100 clients that will be created to run on the server.
+- -c _NUM_CYCLES_: The number of types the sequence of commands will be run by each client.
+- -l: Enables line rewriting so the terminal isn't saturated with the client creation information.
+- -h: Prints the help message.
 
 Usage:
 ```
-./concurrent_clients_test.sh NUM_BATCHES NUM_CYCLES
+./concurrent_clients_test.sh -n NUM_BATCHES -c NUM_CYCLES [-hl]
 ```
 
 In order to properly run the script, perform the following actions:
@@ -45,7 +47,7 @@ Start the server:
 
 Start the script:
 ```
-./concurrent_clients_test 10 5
+./concurrent_clients_test -n 10 -c 5
 ```
 
 The above command will run 10 rounds of 100 clients running a set of commands 5 times each on the server before exiting.
@@ -53,12 +55,14 @@ The above command will run 10 rounds of 100 clients running a set of commands 5 
 ### Flood Server Test
 The script rapidly connects clients to the server in an attempt to stress test the connection process. The clients will run a single command to make sure they are fully connecting and can communicate with bash. Finally, the script will wait until all of the clients are collected before exiting. If the script hangs and your server isn't doing anything, there is definitely a problem.
 
-The script takes a single argument:
-- NUM_CLIENTS: The number of clients to connect to the server quickly.
+The script can take multiple arguments:
+- -n NUM_CLIENTS: The number of clients to connect to the server quickly.
+- -l: Enables line rewriting so the terminal isn't saturated with the client creation information.
+- -h: Prints the help message.
 
 Usage:
 ```
-./flood_server_test.sh NUM_CLIENTS
+./flood_server_test.sh -n NUM_CLIENTS [-lh]
 ```
 
 In order to properly run the script, perform the following actions:
@@ -70,7 +74,7 @@ Start the server:
 
 Start the script:
 ```
-./flood_server_test.sh 1000
+./flood_server_test.sh -n 1000
 ```
 
 The above command will create 1000 clients on the server.
@@ -82,10 +86,11 @@ The script takes a three arguments:
 - -g NUM_GOOD_CLIENTS: The number of working clients to connect to the server quickly.
 - -b NUM_BAD_CLIENTS: The number of broken clients to connect to the server quickly.
 - -l: Runs the script in line squashing mode where it will show the current progress on a single line rather than show the runtime tests on all newlines. Useful for a quick check to see if it runs or not. Otherwise, you will likely want to keep this option off so you can see the PIDs of the processes and debug easier.
+- -h: Prints the help message.
 
 Usage:
 ```
-./flood_server_hybrid_test.sh -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-l]
+./flood_server_hybrid_test.sh -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-lh]
 ```
 
 In order to properly run the script, perform the following actions:
