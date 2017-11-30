@@ -74,6 +74,33 @@ Start the script:
 
 The above command will create 1000 clients on the server.
 
+### Flood Server Hybrid Test
+The script rapidly connects BOTH broken and working clients to the server in an attempt to stress test the connection process. The working clients will run a single command to make sure they are fully connecting and can communicate with bash. Finally, the script will wait until all of the clients are collected before exiting. If the script hangs and your server isn't doing anything, there is definitely a problem.
+
+The script takes a three arguments:
+- -g NUM_GOOD_CLIENTS: The number of working clients to connect to the server quickly.
+- -b NUM_BAD_CLIENTS: The number of broken clients to connect to the server quickly.
+- -l: Runs the script in line squashing mode where it will show the current progress on a single line rather than show the runtime tests on all newlines. Useful for a quick check to see if it runs or not. Otherwise, you will likely want to keep this option off so you can see the PIDs of the processes and debug easier.
+
+Usage:
+```
+./flood_server_hybrid_test.sh -g NUM_GOOD_CLIENTS -b NUM_BAD_CLIENTS [-l]
+```
+
+In order to properly run the script, perform the following actions:
+
+Start the server:
+```
+./server
+```
+
+Start the script:
+```
+./flood_server_hybrid_test.sh -g 150 -b 50
+```
+
+The above command will create 200 clients on the server where 150 of them are working clients and 50 are broken clients. Note that they will all be interlaced together and not grouped.
+
 ### PWrite
 The script is just a small helper to cat a file over and over to create a partial write.
 
