@@ -31,9 +31,9 @@ fi
 nclients=$1
 ncycles=$2
 bsize=100
+client=0
 
-function clientscript()
-{
+function clientscript() {
     # Change the separator from spaces to a newline 
     # so we can send commands that include spaces.
     IFS=$'\n'
@@ -57,7 +57,7 @@ function remove_error_file() {
 
     if [[ -e testerrors ]]; then
         if ! rm -f testerrors; then
-            echo "Failed to remove any previous testerrors files! Manually remove the file to continue."
+            echo "${RED}Failed to remove any previous testerrors files! Manually remove the file to continue."
             return -1
         fi
     fi
@@ -65,52 +65,74 @@ function remove_error_file() {
     return 0
 }
 
+# This make code can be removed if you don't want it to make the client tty.
 if [[ -e client-no-tty-tester ]]; then
     if ! rm -f client-no-tty-tester; then
-        echo "Failed to remove old version of the client."
+        echo "${RED}Failed to remove old version of the client.${END_COLOR}"
         exit 1
     fi
 fi
 
 if ! make nottyclient; then 
-    echo "Error: Failed making client-no-tty-tester."
+    echo "${RED}Error: Failed making client-no-tty-tester.${END_COLOR}"
+    exit 1
+fi
+# End client tty make code
+
+if [[ ! -x client-no-tty-tester ]]; then
+    echo "${RED}The client executable client-no-tty-tester doesn't exist!${END_COLOR}"
     exit 1
 fi
 
 if lsof -i :4070 &> /dev/null; then
     echo "Server is running!"
 else
-    echo "Error: server does not seem to be running"
+    echo "${RED}Error: server does not seem to be running!${END_COLOR}"
     exit 1
 fi
 
 remove_error_file
 
-echo "Running client tests."
+echo -e "\nTest Parameters:"
+echo "--------------------------------"
+echo "Number of batches = $nclients"
+echo "Number of clients = $(($nclients * $bsize))"
+echo "--------------------------------"
+
+echo -e "\nBeginning client tests...\n";
 
 # Run specified number of clients against server:
 for (( i=1; i<="$nclients"; i++ )); do
+    echo "Processing batch $i"
     for (( j=1; j<=$bsize; j++)); do 
-        clientscript "$ncycles" | ./client-no-tty-tester 127.0.0.1 2>> testerrors 1> /dev/null &
+        (($client++))   # Update to the current client.
+
+        clientscript "$ncycles" $client | ./client-no-tty-tester 127.0.0.1 2>> testerrors 1> /dev/null &
+        
+        echo "($client/$(($nclients * $bsize))) Adding client and running commands..."
+        tput civis      # Set the cursor to invisible momentarily.
+        tput cuu1       # Move the cursor up one line.
+        tput el         # Delete the entire line in the terminal.
     done
+    echo "Finished processing batch $i"
     sleep 1
 done
+
+echo -e "\nWaiting for clients to exit..."
 
 # Waits for all children to close prior to exiting. If the 
 # script hangs, then all children aren't finishing/exiting.
 # That would be an error.
 wait
 
-echo "Done Testing!"
+echo -e "\nDone Testing!\n"
 
 if [[ -s testerrors ]]; then
-    echo "${RED}Error messages generated, see file: testerrors${END_COLOR}"
-    kill $serverpid
+    echo -e "${RED}Error messages generated, see file: testerrors${END_COLOR}\n"
     exit 1
 else
-    echo "${GREEN}Successfully passed all testing with $(($nclients * $bsize)) clients each executing $ncycles cycles!${END_COLOR}"
+    echo -e "${GREEN}Successfully passed all testing with $(($nclients * $bsize)) clients each executing $ncycles cycles!${END_COLOR}\n"
     remove_error_file
-    kill $serverpid
     exit 0
 fi
 
