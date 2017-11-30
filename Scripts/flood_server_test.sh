@@ -104,6 +104,7 @@ for (( i=1; i<="$nclients"; i++ )); do
     tput civis      # Set the cursor to invisible momentarily.
     tput cuu1       # Move the cursor up one line.
     tput el         # Delete the entire line in the terminal.
+    tput cnorm
 done
 
 echo -e "\nWaiting for clients to exit..."
