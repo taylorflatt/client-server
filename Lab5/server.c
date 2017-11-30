@@ -244,6 +244,8 @@ void handle_io(int fd) {
 
     if(fd == listen_fd) {
         client_connect();
+    } else if(fd == t_epoll_fd) {
+        handle_timer_event();
     } else if(get_cstate(fd) == new) {
         if(validate_client(fd) || open_pty(fd)) {
             perror("(handle_io) validate_client()/establish_client(): Error establishing the client.");
@@ -623,13 +625,7 @@ void epoll_listener() {
         for(i = 0; i < events; i++) {
             /* Check if there is an event and the associated fd is available for reading. */
             if(ev_list[i].events & (EPOLLIN | EPOLLOUT)) {
-                /* If the event is a timer, process it. Otherwise transfer data. */
-                if((ev_list[i].data.fd == t_epoll_fd) & EPOLLIN) { 
-                    handle_timer_event();
-                } else {
-                    //DTRACE("%ld:Adding task to the thread pool from fd=%d.\n", (long)getpid(), ev_list[i].data.fd); 
-                    tpool_add_task(ev_list[i].data.fd);
-                }
+                tpool_add_task(ev_list[i].data.fd);
             } else if(ev_list[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
                 DTRACE("%ld:Received an EPOLLHUP or EPOLLERR on %d. Shutting it down.\n", (long)getpid(), ev_list[i].data.fd);
                 graceful_exit(ev_list[i].data.fd);
