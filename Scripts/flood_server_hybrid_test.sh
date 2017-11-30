@@ -118,6 +118,9 @@ function remove_error_file() {
 
 # This make code can be removed if you don't want it to make the client tty.
 if [[ ! -x client-no-tty-tester ]]; then
+
+    echo -e "\nMaking the client tester..."
+
     if ! make nottyclient; then 
         echo "Error: Failed making client-no-tty-tester."
         exit 1
@@ -129,6 +132,8 @@ if [[ ! -x client-no-tty-tester ]]; then
     fi
 fi
 
+echo -e "\nMaking the broken clients..."
+
 if ! make brokenclients; then
     echo "Error: Failed making broken clients."
     exit 1
@@ -136,7 +141,7 @@ fi
 # End client tty make code
 
 if lsof -i :4070 &> /dev/null; then
-    echo "Server is running!"
+    echo -e "\nServer is running!"
 else
     echo "Error: server does not seem to be running"
     exit 1
@@ -176,7 +181,7 @@ for (( i=1; i<=$nclients; i++ )); do
         echo "($i/$nclients) Adding ${client_list[$rclient]} BROKEN client ($cpid) and running commands..."
     else
         ((ngclientsrun++))
-        clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null &
+        clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 1> /dev/null 2>> testerrors &
         cpid=${!}                   # Get the PID of the client that was just created.
 
         echo "($i/$nclients) Adding WORKING client ($cpid) and running commands..."
