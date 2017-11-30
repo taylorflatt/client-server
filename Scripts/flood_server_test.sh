@@ -14,6 +14,31 @@
 #
 # Usage: floodServer NUMCLIENTS
 
+function print_usage()
+{
+	echo -e "\nUsage: $0 -n NUMCLIENTS [-l]\n"
+}
+
+# Displays the help information to a user.
+function print_help()
+{
+	print_usage
+	echo -e "Joins n-clients to a server and waits until all children are collected to complete. \n"
+	
+	echo -e "\t -n NUMCLIENTS \t The number of clients who will be created."
+    echo -e "\t -l \t\t Enables line rewriting so the terminal isn't saturated with the client creation information."
+    echo -e "\t -h \t\t Prints this help message. \n"
+	
+	echo "Note:"
+	echo -e "\t-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
+	
+	echo "Example:"
+	echo -e "\t./flood_server_test -n 1000 \n"
+	echo -e "\tWill create 1000 good clients and connect them to a server rapidly.\n"
+	
+	echo -e "Full documentation and source code can be found at: <www.github.com/taylorflatt/client-server>.\n"
+}
+
 # Font colors for error/success messages.
 RED=`tput setaf 1`
 GREEN=`tput setaf 2`
@@ -23,13 +48,39 @@ END_COLOR=`tput sgr0`
 # (Separate each command line with \n, exit automatically sent at end.)
 clientcommands=$'pwd\nexit'
 
-if [[ $# != 1 ]]; then
-    echo "flood_server_test NUMCLIENTS"
+if [[ $# < 1 || $# > 4 ]]; then
+    print_usage
     exit 1
 fi
 
 scriptdir=$(dirname "$0")
-nclients=$1
+linewriting=0
+
+# Parse the arguments.
+while getopts ":n:lh" opt; do
+	case $opt in
+    n)
+		nclients=$OPTARG
+		;;
+	l)
+		linewriting=1
+		;;
+    h)
+		print_help
+        exit 0
+		;;
+	?)
+		print_usage
+		exit 1	
+		;;
+	esac
+done
+
+if [[ -z ${nclients+x} ]]; then
+    echo -e "\nError: Please specify the number of clients!"
+    print_usage
+    exit 1
+fi
 
 function clientscript()
 {
@@ -64,19 +115,28 @@ function remove_error_file() {
     return 0
 }
 
-# This make code can be removed if you don't want it to make the client tty.
-if [[ ! -x client-no-tty-tester ]]; then
-    if ! make nottyclient; then 
-        echo "Error: Failed making client-no-tty-tester."
-        exit 1
-    fi
-
+for ((i=1; i<=2; i++)); do
     if [[ ! -x client-no-tty-tester ]]; then
-        echo "Error: Must have a client named client-no-tty-tester."
-        exit 1
+
+        # If this is the second time checking for the broken clients, then just error out.
+        if [[ i -eq 2 ]]; then
+            echo "${RED}Error: Already tried making client-no-tty-tester and it still doesn't exist!${END_COLOR}"
+            exit 1
+        fi
+
+        if [[ ! -e makefile ]]; then
+            echo "${RED}Error: client-no-tty-tester doesn't exist and there isn't a makefile to try and make it.${END_COLOR}"
+            exit 1
+        fi
+
+        echo "Attempting to make the client..."
+
+        if ! make nottyclient; then
+            echo "${RED}Error: Failed making broken clients.${END_COLOR}"
+            exit 1
+        fi
     fi
-fi
-# End client tty make code
+done
 
 if lsof -i :4070 &> /dev/null; then
     echo "Server is running!"
@@ -99,12 +159,15 @@ SECONDS=0
 for (( i=1; i<="$nclients"; i++ )); do
     
     clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null &
+    cpid=${!}
 
-    echo "($i/$nclients) Adding client and running commands..."
-    tput civis      # Set the cursor to invisible momentarily.
-    tput cuu1       # Move the cursor up one line.
-    tput el         # Delete the entire line in the terminal.
-    tput cnorm
+    echo "($i/$nclients) Adding client ($cpid) and running commands..."
+    if [[ $linewriting -eq 1 ]]; then
+        tput civis      # Set the cursor to invisible momentarily.
+        tput cuu1       # Move the cursor up one line.
+        tput el         # Delete the entire line in the terminal.
+        tput cnorm      # Reset the cursor visibility.
+    fi
 done
 
 echo -e "\nWaiting for clients to exit..."

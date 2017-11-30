@@ -32,7 +32,7 @@ function print_help()
     echo -e "\t -h \t\t\t Prints this help message. \n"
 	
 	echo "Note:"
-	echo -e "-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
+	echo -e "\t-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
 	
 	echo "Example:"
 	echo -e "\t./flood_server_hybrid_test -g 100 -b 50 \n"
