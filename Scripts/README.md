@@ -101,6 +101,30 @@ Start the script:
 
 The above command will create 200 clients on the server where 150 of them are working clients and 50 are broken clients. Note that they will all be interlaced together and not grouped.
 
+### Show Server
+Shows all of the clients called "server" which are currently running using the ps command. It also shows all of the open threads and processes.
+
+To run the script, simply cd into its directory and run:
+```
+./show-server
+```
+
+### Show Clients
+Shows all of the clients called "client" which are currently running for a server using the ps command. It also shows all of the open threads and processes.
+
+To run the script, simply cd into its directory and run:
+```
+./show-client
+```
+
+### Show Sockets
+Shows all of the sockets open on the port the server is using. Default is set to 4070. If the default port is changed within the server, it must be changed within the script.
+
+To run the script, simply cd into its directory and run:
+```
+./show-sockets
+```
+
 ### PWrite
 The script is just a small helper to cat a file over and over to create a partial write.
 
