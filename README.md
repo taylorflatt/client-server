@@ -51,29 +51,18 @@ Then connect a client (or more) using the server IP:
 ```
 
 ## Auxiliary Scripts
-### show-clients
-Shows all of the clients called "client" which are currently running for a server using the ps command. It also shows all of the open threads and processes.
 
-To run the script, simply cd into its directory and run:
-```
-./show-client
-```
+The following scripts can be used to test or debug the server:
 
-### show-server
-Shows all of the clients called "server" which are currently running using the ps command. It also shows all of the open threads and processes.
-
-To run the script, simply cd into its directory and run:
-```
-./show-server
-```
-
-### show-sockets
-Shows all of the sockets open on the port the server is using. Default is set to 4070. If the default port is changed within the server, it must be changed within the script.
-
-To run the script, simply cd into its directory and run:
-```
-./show-sockets
-```
+- [Broken Clients Test](https://github.com/taylorflatt/client-server/blob/master/Scripts/broken_clients_test.sh)
+- [Concurrent Clients Test](https://github.com/taylorflatt/client-server/blob/master/Scripts/concurrent_clients_test.sh)
+- [Flood Server Test](https://github.com/taylorflatt/client-server/blob/master/Scripts/flood_server_test.sh)
+- [Flood Server Hybrid Test](https://github.com/taylorflatt/client-server/blob/master/Scripts/flood_server_hybrid_test.sh)
+- [Pwrite](https://github.com/taylorflatt/client-server/blob/master/Scripts/pwrite.sh)
+- [Show Server](https://github.com/taylorflatt/client-server/blob/master/Scripts/show-server)
+- [Show Clients](https://github.com/taylorflatt/client-server/blob/master/Scripts/show-client)
+- [Show Sockets](https://github.com/taylorflatt/client-server/blob/master/Scripts/show-server)
+- [All Broken Clients](https://github.com/taylorflatt/client-server/tree/master/Scripts/BrokenClients)
 
 ## Future
 I plan on implementing a logger to record and report what happens during server runtime such as:
