@@ -49,7 +49,7 @@
 #define MAX_LENGTH 4096
 #define MAX_NUM_CLIENTS 64000
 #define MAX_EVENTS 2048
-#define SECRET "cs407rembash\n"
+#define SECRET "<cs407rembash>\n"
 #define CHALLENGE "<rembash>\n"
 #define PROCEED "<ok>\n"
 #define ERROR "<error>\n"
