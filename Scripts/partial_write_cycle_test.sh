@@ -2,7 +2,7 @@
 
 # Version 0.1
 # Author: Taylor Flatt
-# Script which will run a cat command on a set of files a single time and verify the output. A client is 
+# Script which will run a cat command on a set of files c-times and verify the output. A client is 
 # joined to the server and then exits for each command to ensure that there isn't random buffer before utilized 
 # for subsequent test files. 
 #
@@ -17,19 +17,20 @@
 # Note: The script also calls the client-no-tty client since running headless, we don't want to 
 # make modifications to the tty.
 #
-# Usage: partial_write_test.sh
+# Usage: partial_write_test.sh -c NUMCYCLES
 
 function print_usage()
 {
-	echo -e "\nUsage: $0 [-l]\n"
+	echo -e "\nUsage: $0 -c NUMCYCLES [-l]\n"
 }
 
 # Displays the help information to a user.
 function print_help()
 {
 	print_usage
-	echo -e "Joins a single client which will run a cat command on a set of files a single time and verify the output.. \n"
+	echo -e "Joins a single client which will run a cat command on a set of files a c-times and verify the output. \n"
 	
+    echo -e "\t -c NUMCYCLES \t The number of times a single client will cat the test file for their particular test."
     echo -e "\t -l \t\t Enables line rewriting so the terminal isn't saturated with the client creation information."
     echo -e "\t -h \t\t Prints this help message. \n"
 	
@@ -37,8 +38,8 @@ function print_help()
 	echo -e "\t-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
 	
 	echo "Example:"
-	echo -e "\t./flood_server_test -n 1000 \n"
-	echo -e "\tWill create 1000 good clients and connect them to a server rapidly.\n"
+	echo -e "\t./partial_write_cycle_test -c 2 \n"
+	echo -e "\tWill create a new client for each test that will run the test 2 times.\n"
 	
 	echo -e "Full documentation and source code can be found at: <www.github.com/taylorflatt/client-server>.\n"
 }
@@ -67,7 +68,7 @@ while getopts ":c:lh" opt; do
     c)
         cycles=$OPTARG
         ;;
-	l)
+    l)
 		linewriting=1
 		;;
     h)
@@ -129,6 +130,7 @@ function exit_client() {
     echo "exit"
 }
 
+# Check if the client exists. If it doesn't, build it and check again.
 for ((i=1; i<=2; i++)); do
     if [[ ! -x client-no-tty-tester ]]; then
 
@@ -152,7 +154,7 @@ for ((i=1; i<=2; i++)); do
     fi
 done
 
-# Check to see if the test files exist and if the output files exist.
+# Check to see if the test files exist and if the output files exist (remove them).
 for ((i=0; i<${#test_list[@]}; i++)); do
 
     # Strip the .file from the filename and the append .output.
@@ -203,8 +205,6 @@ echo "--------------------------------"
 echo -e "\nBeginning the partial write tests...\n";
 
 SECONDS=0
-# Run specified number of clients against server and drop client output.:
-
 for (( i=0; i<${#test_list[@]}; i++ )); do
 
     echo -e "Starting test: ${test_list[$i]}"
@@ -212,17 +212,19 @@ for (( i=0; i<${#test_list[@]}; i++ )); do
     cmd="cat ${test_list[$i]}"
     outputfile="${test_list[$i]::-5}.output"
 
-    clientscript $cmd $outputfile | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null
+    # Redirect everything to nothing so that the client connection and bash information isn't 
+    # added to the output file for diffing.
+    clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null
     cpid=${!}
 
     # Check if the output matches the input.
     for c in $(seq 1 "$cycles"); do
         if ! diff -q ${test_list[$i]} $outputfile.$c &> /dev/null; then
-            echo -e "${RED}Test ${test_list[$i]} FAILED! The output differs from the input! The changes are below:${END_COLOR}\n"
+            echo -e "${RED}Test ${test_list[$i]} FAILED on client $cpid! The output differs from the input! The changes are below:${END_COLOR}\n"
             ((failed++))
             diff ${test_list[$i]} $outputfile.$c
         else
-            echo -e "${GREEN}Test ${test_list[$i]} PASSED!${END_COLOR}\n"
+            echo -e "${GREEN}Test ${test_list[$i]} PASSED on client $cpid!${END_COLOR}\n"
         fi
     done
 
