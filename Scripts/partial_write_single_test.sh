@@ -31,7 +31,7 @@ function print_usage()
 function print_help()
 {
 	print_usage
-	echo -e "Joins a single client which will run a cat command on a set of files a single time and verify the output.. \n"
+	echo -e "Joins a single client which will run a cat command on a set of files a single time and verify the output. \n"
 	
     echo -e "\t -l \t\t Enables line rewriting so the terminal isn't saturated with the client creation information."
     echo -e "\t -h \t\t Prints this help message. \n"
@@ -117,6 +117,7 @@ function exit_client() {
     echo "exit"
 }
 
+# Check if the client exists. If it doesn't, build it and check again.
 for ((i=1; i<=2; i++)); do
     if [[ ! -x client-no-tty-tester ]]; then
 
@@ -140,7 +141,7 @@ for ((i=1; i<=2; i++)); do
     fi
 done
 
-# Check to see if the test files exist and if the output files exist.
+# Check to see if the test files exist and if the output files exist (remove them).
 for ((i=0; i<${#test_list[@]}; i++)); do
 
     # Strip the .file from the filename and the append .output.
@@ -173,8 +174,6 @@ echo "--------------------------------"
 echo -e "\nBeginning the partial write tests...\n";
 
 SECONDS=0
-# Run specified number of clients against server and drop client output.:
-
 for (( i=0; i<${#test_list[@]}; i++ )); do
 
     echo -e "Starting test: ${test_list[$i]}"
@@ -182,16 +181,18 @@ for (( i=0; i<${#test_list[@]}; i++ )); do
     cmd="cat ${test_list[$i]}"
     outputfile="${test_list[$i]::-5}.output"
 
-    clientscript $cmd $outputfile | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null
+    # Redirect everything to nothing so that the client connection and bash information isn't 
+    # added to the output file for diffing.
+    clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null
     cpid=${!}
 
     # Check if the output matches the input.
     if ! diff -q ${test_list[$i]} $outputfile &> /dev/null; then
-        echo -e "${RED}Test ${test_list[$i]} FAILED! The output differs from the input! The changes are below:${END_COLOR}\n"
+        echo -e "${RED}Test ${test_list[$i]} FAILED on client $cpid! The output differs from the input! The changes are below:${END_COLOR}\n"
         ((failed++))
         diff ${test_list[$i]} $outputfile
     else
-        echo -e "${GREEN}Test ${test_list[$i]} PASSED!${END_COLOR}\n"
+        echo -e "${GREEN}Test ${test_list[$i]} PASSED on client $cpid!${END_COLOR}\n"
     fi
 
     # Make sure there is ample time between clients.
@@ -209,7 +210,8 @@ echo -e "\nDone Testing!\n"
 
 echo -e "\nTest Results:"
 echo "--------------------------------"
-echo "Successfuly tests = $((ntests - failed))"
+echo "Successful tests = $((ntests - failed))"
+echo "Failed tests = $failed"
 if (($SECONDS > 60)); then
     min=($SECONDS%%3600)/60
     sec=($SECONDS%%3600)%60

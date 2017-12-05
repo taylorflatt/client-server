@@ -245,6 +245,7 @@ echo -e "\nDone Testing!\n"
 echo -e "\nTest Results:"
 echo "--------------------------------"
 echo "Successful tests = $(((ntests * cycles) - failed))"
+echo "Failed tests = $failed"
 if (($SECONDS > 60)); then
     min=($SECONDS%%3600)/60
     sec=($SECONDS%%3600)%60
