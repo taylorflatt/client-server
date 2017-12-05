@@ -87,3 +87,4 @@ Lab5/BrokenClients/testerrors
 Testing/server
 Testing/testerrors
 Testing/client-no-tty-tester
+Scripts/*.output
