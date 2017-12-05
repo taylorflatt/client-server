@@ -13,9 +13,6 @@
 #                   Original -> nwrite = write(to, buf, nread); // Where nread = num of bytes read.
 #                   New      -> nwrite = write(to, buf, 2000);
 #
-# Note: The testing files must be located in the same directory as this script and it is advised to 
-# put the server into this script's directory (or uncomment the line in the client function and modify 
-# the path appropriately) so everything runs locally.
 #
 # Note: The script also calls the client-no-tty client since running headless, we don't want to 
 # make modifications to the tty.
@@ -40,8 +37,8 @@ function print_help()
 	echo -e "\t-It may take some time for the script to finish executing since it waits for all of the clients to exit prior to returning. However, if it doesn't exit, then there is a problem with the server.\n"
 	
 	echo "Example:"
-	echo -e "\t./partial_write_test\n"
-	echo -e "\tWill create 1 client for each test file and run a cat on the test file. After which, it will check to see if the inputs and outputs matched.\n"
+	echo -e "\t./flood_server_test -n 1000 \n"
+	echo -e "\tWill create 1000 good clients and connect them to a server rapidly.\n"
 	
 	echo -e "Full documentation and source code can be found at: <www.github.com/taylorflatt/client-server>.\n"
 }
@@ -51,7 +48,7 @@ RED=`tput setaf 1`
 GREEN=`tput setaf 2`
 END_COLOR=`tput sgr0`
 
-if [[ $# < 0 || $# > 1 ]]; then
+if [[ $# < 1 || $# > 3 ]]; then
     print_usage
     exit 1
 fi
@@ -62,10 +59,14 @@ ntests=7
 failed=0
 cmd=
 outputfile=
+cycles=
 
 # Parse the arguments.
-while getopts "lh" opt; do
+while getopts ":c:lh" opt; do
 	case $opt in
+    c)
+        cycles=$OPTARG
+        ;;
 	l)
 		linewriting=1
 		;;
@@ -79,6 +80,15 @@ while getopts "lh" opt; do
 		;;
 	esac
 done
+
+# Make sure that the number of cat cycles are set. This uses variable expansion 
+# which will overwrite the variable ngclients if it is set, otherwise it evaluates to nothingness
+# if ngclients is not set.
+if [[ -z ${cycles+x} ]]; then
+    echo -e "\n${RED}Error: Please specify the number of cycles!${END_COLOR}"
+    print_usage
+    exit 1
+fi
 
 # The test files MUST contain the following structure:
 # byteSize.test (Must be exactly .test at the end).
@@ -100,9 +110,11 @@ function clientscript()
     # Change the separator from spaces to a newline 
     # so we can send commands that include spaces.
     IFS=$'\n'
-    #echo "cd ../Scripts"    # If server is in another directory.
+    echo "cd ../Scripts"    # Temporary if server is in another directory.
     echo "unset HISTFILE"
-    echo "$cmd 1> $outputfile"
+    for c in $(seq 1 "$cycles"); do
+            echo "$cmd 1> $outputfile.$c"
+    done
 
     exit_client 1> /dev/null
 
@@ -151,15 +163,32 @@ for ((i=0; i<${#test_list[@]}; i++)); do
         exit 1
     fi
 
-    if [[ -e $outputfile ]]; then
-        if ! rm -f $outputfile; then
-            echo "${RED}Failed to remove $outputfile. Please remove it before continuing.${END_COLOR}"
-        fi
+    ofiles=$(ls $outputfile* 2> /dev/null | wc -l)
+    if [[ $ofiles -ne 0 ]]; then
+        files=($outputfile*)
+        echo -e "\nRemoving the old output file(s) for ${outputfile}..."
+
+        for (( j=0; j<${#files[@]}; j++ )); do
+            echo "Removing ${files[$j]}..."
+            if ! rm -f ${files[$j]}; then
+                echo "${RED}Failed to remove $ofiles[$j]. Please remove it before continuing.${END_COLOR}"
+                exit 1
+            fi
+
+            if [[ -e ${files[$j]} ]]; then
+                echo "${RED}Failed to remove ${files[$j]}!${END_COLOR}"
+                exit 1
+            else
+                echo "Successfully removed ${files[$j]}"
+            fi
+        done
     fi
 done
 
+echo -e "\nFinished cleaning up old output files..."
+
 if lsof -i :4070 &> /dev/null; then
-    echo -e "\nServer is running!"
+    echo -e "Server is running!"
 else
     echo "${RED}Error: server does not seem to be running.${END_COLOR}"
     exit 1
@@ -167,7 +196,8 @@ fi
 
 echo -e "\nTest Parameters:"
 echo "--------------------------------"
-echo "Number of tests = $ntests"
+echo "Number of tests = $((ntests * cycles))"
+echo "Number of cycles = $cycles"
 echo "--------------------------------"
 
 echo -e "\nBeginning the partial write tests...\n";
@@ -186,13 +216,16 @@ for (( i=0; i<${#test_list[@]}; i++ )); do
     cpid=${!}
 
     # Check if the output matches the input.
-    if ! diff -q ${test_list[$i]} $outputfile &> /dev/null; then
-        echo -e "${RED}Test ${test_list[$i]} FAILED! The output differs from the input! The changes are below:${END_COLOR}\n"
-        ((failed++))
-        diff ${test_list[$i]} $outputfile
-    else
-        echo -e "${GREEN}Test ${test_list[$i]} PASSED!${END_COLOR}\n"
-    fi
+    for c in $(seq 1 "$cycles"); do
+        if ! diff -q ${test_list[$i]} $outputfile.$c &> /dev/null; then
+            echo -e "${RED}Test ${test_list[$i]} FAILED! The output differs from the input! The changes are below:${END_COLOR}\n"
+            ((failed++))
+            diff ${test_list[$i]} $outputfile.$c
+        else
+            echo -e "${GREEN}Test ${test_list[$i]} PASSED!${END_COLOR}\n"
+        fi
+    done
+
 
     # Make sure there is ample time between clients.
     sleep 1
@@ -209,7 +242,7 @@ echo -e "\nDone Testing!\n"
 
 echo -e "\nTest Results:"
 echo "--------------------------------"
-echo "Successfuly tests = $((ntests - failed))"
+echo "Successful tests = $(((ntests * cycles) - failed))"
 if (($SECONDS > 60)); then
     min=($SECONDS%%3600)/60
     sec=($SECONDS%%3600)%60
