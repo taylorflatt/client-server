@@ -56,7 +56,7 @@ fi
 
 scriptdir=$(dirname "$0")
 linewriting=0
-ntests=7
+ntests=8
 failed=0
 cmd=
 outputfile=
@@ -111,7 +111,11 @@ function clientscript()
     # Change the separator from spaces to a newline 
     # so we can send commands that include spaces.
     IFS=$'\n'
-    echo "cd ../Scripts"    # Temporary if server is in another directory.
+
+    # If the server is in another directory, you need to move the client
+    # into the directory of the script so it can run the diff cmd later.
+    echo "cd ../Scripts"
+
     echo "unset HISTFILE"
     for c in $(seq 1 "$cycles"); do
             echo "$cmd 1> $outputfile.$c"
@@ -215,16 +219,15 @@ for (( i=0; i<${#test_list[@]}; i++ )); do
     # Redirect everything to nothing so that the client connection and bash information isn't 
     # added to the output file for diffing.
     clientscript | "$scriptdir"/client-no-tty-tester 127.0.0.1 &> /dev/null
-    cpid=${!}
 
     # Check if the output matches the input.
     for c in $(seq 1 "$cycles"); do
         if ! diff -q ${test_list[$i]} $outputfile.$c &> /dev/null; then
-            echo -e "${RED}Test ${test_list[$i]} FAILED on client $cpid! The output differs from the input! The changes are below:${END_COLOR}\n"
+            echo -e "${RED}Test ${test_list[$i]} FAILED! The output differs from the input! The changes are below:${END_COLOR}\n"
             ((failed++))
             diff ${test_list[$i]} $outputfile.$c
         else
-            echo -e "${GREEN}Test ${test_list[$i]} PASSED on client $cpid!${END_COLOR}\n"
+            echo -e "${GREEN}Test ${test_list[$i]} PASSED!${END_COLOR}\n"
         fi
     done
 
