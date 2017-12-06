@@ -17,7 +17,7 @@
 # Note: The script also calls the client-no-tty client since running headless, we don't want to 
 # make modifications to the tty.
 #
-# Usage: partial_write_test.sh -c NUMCYCLES
+# Usage: partial_write_cycle_test.sh -c NUMCYCLES
 
 function print_usage()
 {
@@ -47,6 +47,7 @@ function print_help()
 # Font colors for error/success messages.
 RED=`tput setaf 1`
 GREEN=`tput setaf 2`
+YELLOW=`tput setaf 3`
 END_COLOR=`tput sgr0`
 
 if [[ $# < 1 || $# > 3 ]]; then
@@ -102,6 +103,38 @@ test_list+=("4000.test")
 test_list+=("10000.test")
 test_list+=("20000.test")
 test_list+=("100000.test")
+
+# Make sure the user would like to generate the number of files required for the test
+# and is aware of the size of the generated files as well.
+if [[ $cycles -gt 10 ]]; then
+total=
+for (( i=0; i<${#test_list[@]}; i++ )); do
+    filesize=${test_list[$i]::-5}
+    total=$((total + filesize))
+done
+
+while true; do
+    echo ""
+    prompt="${YELLOW}WARNING! The number of cycles you have entered will create $((ntests * cycles)) "
+    prompt+="files for output with a total size around $(((total * cycles) / 100000))MB! ARE YOU SURE (y/n)?${END_COLOR} "
+    read -p "$prompt" ans
+
+    case ${ans:0:1} in
+        y|Y )
+            echo -e "\nContinuing...\n"
+            break
+            ;;
+        n|N )
+            echo -e "\nNo changes made. Exiting...\n"
+            exit 0
+            ;;
+        * )
+            echo -e "\nPlease enter either a Y/y or a N/n."
+            continue
+        ;;
+    esac
+done
+fi
 
 # Setup to allow this function's output to be redirected to /dev/null 
 # and dynamically change IO redirection so that the output to the file 
